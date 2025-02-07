@@ -1,6 +1,5 @@
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use serde_json::{json, Value as JsonValue};
+use rand::{ seq::SliceRandom, thread_rng };
+use serde_json::{ json, Value as JsonValue };
 use toml::Value;
 
 pub fn batch_process_singbox_outbounds(
@@ -10,7 +9,7 @@ pub fn batch_process_singbox_outbounds(
     userid: usize,
     proxy_type: &str,
     set_port: u16,
-    max_element_count: usize,
+    max_element_count: usize
 ) -> Vec<Vec<(String, serde_json::Value)>> {
     // 初始化分页容器
     let mut singbox_outbounds_vecs: Vec<Vec<(String, serde_json::Value)>> = Vec::new();
@@ -25,7 +24,7 @@ pub fn batch_process_singbox_outbounds(
                     userid,
                     proxy_type,
                     server.clone(),
-                    set_port,
+                    set_port
                 );
                 // 检查当前分页容器是否已满（max_element_count 个元素）
                 if sub_singbox_outbounds_vec.len() == max_element_count {
@@ -51,7 +50,7 @@ pub fn batch_process_singbox_outbounds(
                             userid,
                             proxy_type,
                             set_server,
-                            set_port,
+                            set_port
                         );
                         // 检查当前分页容器是否已满（max_element_count 个元素）
                         if sub_singbox_outbounds_vec.len() == max_element_count {
@@ -79,7 +78,7 @@ pub fn match_template_output_singbox_config(
     enable_template: bool,
     template: serde_json::Value,
     outbounds_datas: Vec<Vec<(String, serde_json::Value)>>,
-    page: usize,
+    page: usize
 ) -> String {
     match enable_template {
         true => {
@@ -97,17 +96,20 @@ pub fn match_template_output_singbox_config(
                 // 更新singbox模板中含有{all}的向量值
                 update_singbox_template_value(outside_outbounds, &outbounds_datas, page);
             }
-            let formatted_json =
-                serde_json::to_string_pretty(&singbox_template).unwrap_or_else(|_| "".to_string());
+            let formatted_json = serde_json
+                ::to_string_pretty(&singbox_template)
+                .unwrap_or_else(|_| "".to_string());
             return formatted_json;
         }
         false => {
-            let outbounds_json = serde_json::json!({
+            let outbounds_json =
+                serde_json::json!({
                 "outbounds": outbounds_datas[page].iter().map(|(_, v)| v).collect::<Vec<_>>()
             });
 
-            let formatted_json =
-                serde_json::to_string_pretty(&outbounds_json).unwrap_or_else(|_| "".to_string());
+            let formatted_json = serde_json
+                ::to_string_pretty(&outbounds_json)
+                .unwrap_or_else(|_| "".to_string());
             return formatted_json;
         }
     }
@@ -116,20 +118,22 @@ pub fn match_template_output_singbox_config(
 fn update_singbox_template_value(
     outside_outbounds: &mut Vec<serde_json::Value>,
     outbounds_datas: &Vec<Vec<(String, serde_json::Value)>>,
-    page: usize,
+    page: usize
 ) {
     // 遍历数组中的每个元素
     outside_outbounds.iter_mut().for_each(|item| {
         // 处理字段为对象的情况
         if let Some(obj) = item.as_object_mut() {
-            if let Some(inside_outbounds) = obj
-                .get_mut("outbounds")
-                .and_then(serde_json::Value::as_array_mut)
+            if
+                let Some(inside_outbounds) = obj
+                    .get_mut("outbounds")
+                    .and_then(serde_json::Value::as_array_mut)
             {
                 // 查找并删除目标值 "{all}"、并将新值合并进来
-                if let Some(pos) = inside_outbounds
-                    .iter()
-                    .position(|x| x.as_str() == Some("{all}"))
+                if
+                    let Some(pos) = inside_outbounds
+                        .iter()
+                        .position(|x| x.as_str() == Some("{all}"))
                 {
                     inside_outbounds.remove(pos);
 
@@ -143,8 +147,7 @@ fn update_singbox_template_value(
                                 None
                             }
                         })
-                        .collect::<Vec<_>>())
-                    .to_vec();
+                        .collect::<Vec<_>>()).to_vec();
 
                     // 将新数据合并到目标数组
                     inside_outbounds.extend(insert_values);
@@ -159,32 +162,33 @@ fn build_singbox_config(
     userid: usize,
     proxy_type: &str,
     set_server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let proxy: toml::Value = crate::utils::toml::get_toml_proxy(toml_value, userid, proxy_type);
 
     // 候补端口列表，后续随机选择一个端口
     let alternate_ports: Vec<u16> = vec![443, 2053, 2083, 2087, 2096, 8443];
     if proxy.is_table() {
-        match proxy.get("uuid") {
+        let _ = match proxy.get("uuid") {
             Some(_) => {
                 let (remarks, vless_with_singbox) = build_vless_singbox(
                     &proxy,
                     alternate_ports.clone(),
                     set_server.clone(),
-                    set_port,
+                    set_port
                 );
                 return (remarks, vless_with_singbox);
             }
             None => serde_json::Value::Null,
         };
-        match proxy.get("password") {
+
+        let _ = match proxy.get("password") {
             Some(_) => {
                 let (remarks, trojan_with_singbox) = build_trojan_singbox(
                     &proxy,
                     alternate_ports.clone(),
                     set_server.clone(),
-                    set_port,
+                    set_port
                 );
                 return (remarks, trojan_with_singbox);
             }
@@ -198,26 +202,24 @@ fn build_trojan_singbox(
     toml_value: &Value,
     alternate_ports: Vec<u16>, // 候补端口列表
     set_server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let (remarks_prefix, host, server_name, path, random_ports, password) =
         crate::utils::toml::get_toml_parameters(
             toml_value,
             alternate_ports,
-            "password".to_string(),
+            "password".to_string()
         );
 
     // 使用外面设置的端口，还是随机端口
     let port = match set_port == 0 {
-        true => random_ports
-            .choose(&mut thread_rng())
-            .copied()
-            .unwrap_or(443),
+        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
         false => set_port,
     };
     let remarks = format!("{}|{}:{}", remarks_prefix, set_server, port);
 
-    let singbox_trojan_json_str = r#"{
+    let singbox_trojan_json_str =
+        r#"{
         "type": "trojan",
         "tag": "tag_name",
         "server": "",
@@ -241,8 +243,9 @@ fn build_trojan_singbox(
         }
     }"#;
 
-    let mut jsonvalue: JsonValue =
-        serde_json::from_str(singbox_trojan_json_str).unwrap_or(JsonValue::Null);
+    let mut jsonvalue: JsonValue = serde_json
+        ::from_str(singbox_trojan_json_str)
+        .unwrap_or(JsonValue::Null);
 
     let password_field = vec!["password", &password];
 
@@ -254,7 +257,7 @@ fn build_trojan_singbox(
         port,
         path,
         host,
-        server_name,
+        server_name
     );
 
     (remarks, jsonvalue)
@@ -264,22 +267,20 @@ fn build_vless_singbox(
     toml_value: &Value,
     ports: Vec<u16>,
     set_server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let (remarks_prefix, host, server_name, path, random_ports, uuid) =
         crate::utils::toml::get_toml_parameters(toml_value, ports, "uuid".to_string());
 
     // 使用外面设置的端口，还是随机端口
     let port = match set_port == 0 {
-        true => random_ports
-            .choose(&mut thread_rng())
-            .copied()
-            .unwrap_or(443),
+        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
         false => set_port,
     };
     let remarks = format!("{}|{}:{}", remarks_prefix, set_server, port);
 
-    let vless_with_singbox = r#"{
+    let vless_with_singbox =
+        r#"{
         "type": "vless",
         "tag": "vless_tag",
         "server": "",
@@ -302,8 +303,9 @@ fn build_vless_singbox(
             "early_data_header_name": "Sec-WebSocket-Protocol"
         }
     }"#;
-    let mut jsonvalue: JsonValue =
-        serde_json::from_str(vless_with_singbox).unwrap_or(JsonValue::Null);
+    let mut jsonvalue: JsonValue = serde_json
+        ::from_str(vless_with_singbox)
+        .unwrap_or(JsonValue::Null);
 
     let uuid_field = vec!["uuid", &uuid];
 
@@ -315,7 +317,7 @@ fn build_vless_singbox(
         port,
         path,
         host,
-        server_name,
+        server_name
     );
 
     (remarks, jsonvalue)
@@ -329,7 +331,7 @@ fn modify_singbox_json_value(
     port: u16,
     path: &str,
     host: &str,
-    sni: &str,
+    sni: &str
 ) {
     // 生成随机指纹
     let fingerprint = crate::utils::common::random_fingerprint();
@@ -339,7 +341,7 @@ fn modify_singbox_json_value(
         // vless的uuid的字段，trojan的password的字段
         obj.insert(
             uuid_password_field[0].to_string(),
-            JsonValue::String(uuid_password_field[1].to_string()),
+            JsonValue::String(uuid_password_field[1].to_string())
         );
         obj.insert("tag".to_string(), JsonValue::String(remarks));
         obj.insert("server".to_string(), JsonValue::String(set_server.clone()));
@@ -349,10 +351,7 @@ fn modify_singbox_json_value(
     // 修改内层tls字段值
     if let Some(tls) = jsonvalue.get_mut("tls") {
         if let Some(tls_obj) = tls.as_object_mut() {
-            tls_obj.insert(
-                "server_name".to_string(),
-                JsonValue::String(sni.to_string()),
-            );
+            tls_obj.insert("server_name".to_string(), JsonValue::String(sni.to_string()));
 
             // 手动关闭tls
             if host.ends_with("workers.dev") {
@@ -365,7 +364,7 @@ fn modify_singbox_json_value(
                 if let Some(utls_obj) = utls.as_object_mut() {
                     utls_obj.insert(
                         "fingerprint".to_string(),
-                        JsonValue::String(fingerprint.to_string()),
+                        JsonValue::String(fingerprint.to_string())
                     );
                 }
             }

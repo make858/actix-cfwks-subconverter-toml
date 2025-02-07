@@ -1,25 +1,21 @@
-use encoding::all::GBK;
-use encoding::{DecoderTrap, Encoding};
+use encoding::{ all::GBK, DecoderTrap, Encoding };
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashSet;
-use std::{
-    fs::{self, File},
-    io::{self, BufRead, BufReader},
-};
+use std::{ collections::HashSet, fs::{ self, File }, io::{ self, BufRead, BufReader } };
 
 lazy_static! {
-    static ref IPV4_OR_IPV6_REGEX: Regex = Regex::new(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b").unwrap(); // 匹配ipv4地址或ipv6地址
+    static ref IPV4_OR_IPV6_REGEX: Regex = Regex::new(
+        r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b"
+    ).unwrap(); // 匹配ipv4地址或ipv6地址
     static ref IP_WITH_PORT_REGEX: Regex = Regex::new(
-        r"\b((?:[0-9]{1,3}\.){3}[0-9]{1,3}),(\d{2,5})\b|(([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}),(\d{2,5})\b",
-    )
-    .unwrap(); // 匹配csv中的IP和端口（比如：192.168.1.1,80）
+        r"\b((?:[0-9]{1,3}\.){3}[0-9]{1,3}),(\d{2,5})\b|(([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}),(\d{2,5})\b"
+    ).unwrap(); // 匹配csv中的IP和端口（比如：192.168.1.1,80）
     static ref DOMAIN_REGEX: Regex = Regex::new(r"\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b").unwrap(); // 粗略匹配一级域名、子域名，不保证后缀的域名真实存在
 }
 
 pub fn read_ip_domain_from_files(
     folder_path: &str,
-    tls_mode: &str,
+    tls_mode: &str
 ) -> io::Result<(Vec<String>, Vec<String>)> {
     // 读取指定文件夹下的所有文件
     let paths = fs::read_dir(folder_path)?;
@@ -36,10 +32,11 @@ pub fn read_ip_domain_from_files(
         // 获取文件名
         let file_name = file_path.file_name().unwrap().to_string_lossy();
         // 排除以 "ips-v" 或 "ipv"开头的文件，排除ip.txt、locations.json的文件
-        if file_name.starts_with("ips-v")
-            || (file_name.starts_with("ipv") && file_extension == "txt")
-            || file_name == "ip.txt"
-            || file_name == "locations.json"
+        if
+            file_name.starts_with("ips-v") ||
+            (file_name.starts_with("ipv") && file_extension == "txt") ||
+            file_name == "ip.txt" ||
+            file_name == "locations.json"
         {
             continue;
         }
@@ -53,7 +50,7 @@ pub fn read_ip_domain_from_files(
                             content,
                             tls_mode,
                             &mut ip_with_port_vec,
-                            &mut ips,
+                            &mut ips
                         );
                     } else {
                         // 以下代码是处理csv/txt文件的格式是GBK编码的情况
@@ -65,7 +62,7 @@ pub fn read_ip_domain_from_files(
                                 &decoded_string,
                                 tls_mode,
                                 &mut ip_with_port_vec,
-                                &mut ips,
+                                &mut ips
                             );
                         }
                     }
@@ -86,7 +83,7 @@ fn extract_ip_port_from_file(
     content: &str,
     tls_mode: &str,
     ip_with_port_vec: &mut Vec<String>,
-    ips: &mut Vec<String>,
+    ips: &mut Vec<String>
 ) {
     if content.contains("IP地址,端口") {
         // 处理有端口的csv数据

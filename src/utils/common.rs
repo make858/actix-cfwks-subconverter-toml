@@ -1,5 +1,4 @@
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{ seq::SliceRandom, thread_rng };
 
 pub fn random_fingerprint() -> String {
     let fingerprint = vec![
@@ -11,7 +10,7 @@ pub fn random_fingerprint() -> String {
         "ios",
         "android",
         "random",
-        "randomized",
+        "randomized"
     ];
     let client_fingerprint = fingerprint
         .choose(&mut thread_rng())

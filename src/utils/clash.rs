@@ -1,5 +1,4 @@
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{ seq::SliceRandom, thread_rng };
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use toml::Value;
@@ -12,7 +11,7 @@ pub fn batch_process_clash_outbounds(
     userid: usize,
     proxy_type: &str,
     set_port: u16,
-    max_element_count: usize,
+    max_element_count: usize
 ) -> Vec<Vec<(String, serde_json::Value)>> {
     // 初始化分页容器
     let mut clash_outbounds_vecs: Vec<Vec<(String, serde_json::Value)>> = Vec::new();
@@ -27,7 +26,7 @@ pub fn batch_process_clash_outbounds(
                     userid,
                     proxy_type,
                     server.clone(),
-                    set_port,
+                    set_port
                 );
                 // 检查当前分页容器是否已满（max_element_count 个元素）
                 if sub_clash_outbounds_vec.len() == max_element_count {
@@ -53,7 +52,7 @@ pub fn batch_process_clash_outbounds(
                             userid,
                             proxy_type,
                             set_server,
-                            set_port,
+                            set_port
                         );
                         // 检查当前分页容器是否已满（max_element_count 个元素）
                         if sub_clash_outbounds_vec.len() == max_element_count {
@@ -81,7 +80,7 @@ pub fn match_template_output_clash_config(
     enable_template: bool,
     template: serde_yaml::Value,
     outbounds_datas: Vec<Vec<(String, serde_json::Value)>>,
-    page: usize,
+    page: usize
 ) -> String {
     let proxy_name = outbounds_datas[page]
         .iter()
@@ -98,14 +97,17 @@ pub fn match_template_output_clash_config(
             return yaml_string;
         }
         false => {
-            let outbounds_json = serde_json::json!({
+            let outbounds_json =
+                serde_json::json!({
                 "proxies": outbounds_datas[page].iter().map(|(_, v)| v).collect::<Vec<_>>()
             });
 
             // 将 serde_json::Value 序列化为 serde_yaml::Value
             let yaml_value: YamlValue = match serde_yaml::to_value(outbounds_json) {
                 Ok(value) => value,
-                Err(_) => return String::new(), // 发生错误时返回空字符串
+                Err(_) => {
+                    return String::new();
+                } // 发生错误时返回空字符串
             };
 
             // 将 serde_yaml::Value 序列化为 YAML 字符串
@@ -120,7 +122,7 @@ pub fn match_template_output_clash_config(
 fn add_node_to_proxies(
     clash_template: &mut YamlValue,
     outbounds_datas: &Vec<Vec<(String, JsonValue)>>,
-    page: usize,
+    page: usize
 ) {
     if let Some(outside_proxies) = clash_template.get_mut("proxies") {
         if let serde_yaml::Value::Sequence(array) = outside_proxies {
@@ -129,8 +131,7 @@ fn add_node_to_proxies(
             let proxies_vec: Vec<serde_yaml::Value> = (*outbounds_datas[page]
                 .iter()
                 .filter_map(|(_k, v)| serde_yaml::to_value(v).ok())
-                .collect::<Vec<_>>())
-            .to_vec();
+                .collect::<Vec<_>>()).to_vec();
             array.extend(proxies_vec);
         }
     }
@@ -148,7 +149,9 @@ fn add_node_name_to_proxies(clash_template: &mut YamlValue, proxy_name: Vec<Stri
                         seq.drain(..).for_each(|item| {
                             if let YamlValue::String(ref s) = item {
                                 match s == "s01" {
-                                    true => contains_s01 = true,
+                                    true => {
+                                        contains_s01 = true;
+                                    }
                                     false => filtered_s01_with_proxies.push(item),
                                 }
                             }
@@ -159,7 +162,7 @@ fn add_node_name_to_proxies(clash_template: &mut YamlValue, proxy_name: Vec<Stri
                                     proxy_name
                                         .clone()
                                         .into_iter()
-                                        .map(|name| YamlValue::String(name.to_string())),
+                                        .map(|name| YamlValue::String(name.to_string()))
                                 );
                             }
                             false => {}
@@ -178,32 +181,32 @@ fn build_clash_config(
     userid: usize,
     proxy_type: &str,
     set_server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let proxy: toml::Value = crate::utils::toml::get_toml_proxy(toml_value, userid, proxy_type);
 
     // 候补端口列表，后续随机选择一个端口
     let alternate_ports: Vec<u16> = vec![443, 2053, 2083, 2087, 2096, 8443];
     if proxy.is_table() {
-        match proxy.get("uuid") {
+        let _ = match proxy.get("uuid") {
             Some(_) => {
                 let (remarks, vless_with_clash) = build_vless_clash(
                     &proxy,
                     alternate_ports.clone(),
                     set_server.clone(),
-                    set_port,
+                    set_port
                 );
                 return (remarks, vless_with_clash);
             }
             None => serde_json::Value::Null,
         };
-        match proxy.get("password") {
+        let _ = match proxy.get("password") {
             Some(_) => {
                 let (remarks, trojan_with_clash) = build_trojan_clash(
                     &proxy,
                     alternate_ports.clone(),
                     set_server.clone(),
-                    set_port,
+                    set_port
                 );
                 return (remarks, trojan_with_clash);
             }
@@ -217,26 +220,24 @@ fn build_trojan_clash(
     toml_value: &Value,
     alternate_ports: Vec<u16>, // 候补端口列表
     server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let (remarks_prefix, host, server_name, path, random_ports, password) =
         crate::utils::toml::get_toml_parameters(
             toml_value,
             alternate_ports,
-            "password".to_string(),
+            "password".to_string()
         );
 
     // 使用外面设置的端口，还是随机端口
     let port = match set_port == 0 {
-        true => random_ports
-            .choose(&mut thread_rng())
-            .copied()
-            .unwrap_or(443),
+        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
         false => set_port,
     };
     let remarks = format!("{}|{}:{}", remarks_prefix, server, port);
 
-    let clash_trojan_json_str = r#"{
+    let clash_trojan_json_str =
+        r#"{
         "type": "trojan",
         "name": "",
         "server": "",
@@ -254,8 +255,9 @@ fn build_trojan_clash(
         }
     }"#;
 
-    let mut jsonvalue: JsonValue =
-        serde_json::from_str(clash_trojan_json_str).unwrap_or(JsonValue::Null);
+    let mut jsonvalue: JsonValue = serde_json
+        ::from_str(clash_trojan_json_str)
+        .unwrap_or(JsonValue::Null);
 
     let password_field = vec!["password", &password];
     let sni_field = vec!["sni", &server_name];
@@ -268,7 +270,7 @@ fn build_trojan_clash(
         server,
         port,
         path,
-        host,
+        host
     );
 
     (remarks, jsonvalue)
@@ -278,21 +280,19 @@ fn build_vless_clash(
     toml_value: &Value,
     ports: Vec<u16>,
     server: String,
-    set_port: u16,
+    set_port: u16
 ) -> (String, serde_json::Value) {
     let (remarks_prefix, host, server_name, path, random_ports, uuid) =
         crate::utils::toml::get_toml_parameters(toml_value, ports, "uuid".to_string());
 
     // 使用外面设置的端口，还是随机端口
     let mut port = match set_port == 0 {
-        true => random_ports
-            .choose(&mut thread_rng())
-            .copied()
-            .unwrap_or(443),
+        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
         false => set_port,
     };
 
-    let vless_with_clash = r#"{
+    let vless_with_clash =
+        r#"{
         "type": "vless",
         "name": "tag_name",
         "server": "",
@@ -309,8 +309,9 @@ fn build_vless_clash(
             "headers": {"Host": ""}
         }
     }"#;
-    let mut jsonvalue: JsonValue =
-        serde_json::from_str(vless_with_clash).unwrap_or(JsonValue::Null);
+    let mut jsonvalue: JsonValue = serde_json
+        ::from_str(vless_with_clash)
+        .unwrap_or(JsonValue::Null);
 
     // 遇到host是workers.dev的，手动修改tls为false
     if host.ends_with("workers.dev") {
@@ -322,9 +323,11 @@ fn build_vless_clash(
                 port = [80, 8080, 8880, 2052, 2082, 2086, 2095]
                     .choose(&mut thread_rng())
                     .copied()
-                    .unwrap()
+                    .unwrap();
             }
-            false => port = port,
+            false => {
+                port = port;
+            }
         }
     }
 
@@ -341,7 +344,7 @@ fn build_vless_clash(
         server,
         port,
         path,
-        host,
+        host
     );
 
     (remarks, jsonvalue)
@@ -355,7 +358,7 @@ fn modify_clash_json_value(
     server: String,
     port: u16,
     path: &str,
-    host: &str,
+    host: &str
 ) {
     // 生成随机指纹
     let fingerprint = crate::utils::common::random_fingerprint();
@@ -365,17 +368,14 @@ fn modify_clash_json_value(
         // vless的uuid，trojan的password
         obj.insert(
             uuid_password_field[0].to_string(),
-            JsonValue::String(uuid_password_field[1].to_string()),
+            JsonValue::String(uuid_password_field[1].to_string())
         );
         // vless的servername，trojan的sni
         obj.insert(
             servername_sni_field[0].to_string(),
-            JsonValue::String(servername_sni_field[1].to_string()),
+            JsonValue::String(servername_sni_field[1].to_string())
         );
-        obj.insert(
-            "client-fingerprint".to_string(),
-            JsonValue::String(fingerprint.to_string()),
-        );
+        obj.insert("client-fingerprint".to_string(), JsonValue::String(fingerprint.to_string()));
         obj.insert("name".to_string(), JsonValue::String(remarks));
         obj.insert("server".to_string(), JsonValue::String(server));
         obj.insert("port".to_string(), JsonValue::Number(port.into()));
