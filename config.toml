@@ -9,7 +9,7 @@ random_ports = [443, 2053, 2083, 2087, 2096, 8443] # [443]
 
 # vless+ws
 [[proxies.vless]]
-remarks_prefix = "VLESS+WS+TLS"
+remarks_prefix = "VLESS+WS"
 uuid = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
 host = "vless.abc.workers.dev"
 server_name = "vless.abc.workers.dev"
