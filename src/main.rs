@@ -1,9 +1,27 @@
 mod utils;
 
-use actix_web::{get, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{ get, web, App, HttpRequest, HttpResponse, HttpServer, Responder };
+use clap::{ error::ErrorKind, CommandFactory, Parser };
 use local_ip_address::local_ip;
 use std::fs;
 use toml::Value;
+
+/// 基于HTTP传输协议的vless、trojan代理转换v2ray、sing-box、clash订阅工具
+#[derive(Parser, Debug, Clone)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// HTTP服务器的端口
+    #[arg(short, long, default_value = "10222")]
+    port: u16,
+
+    /// 默认转换为v2ray，可选singbox、clash
+    #[arg(long, default_value = "v2ray")]
+    target: String,
+}
+
+struct AppState {
+    args: Args,
+}
 
 const SPECIFICATION: &str = include_str!("../使用说明.txt");
 
@@ -20,25 +38,22 @@ async fn index(req: HttpRequest) -> impl Responder {
     let url = format!(
         "{}://{}{}",
         req.connection_info().scheme(),
-        req.connection_info()
-            .host()
-            .replace("127.0.0.1", &ip_address),
+        req.connection_info().host().replace("127.0.0.1", &ip_address),
         req.uri()
     );
 
     // 生成二维码并将html_body嵌入网页中
     let html_content = utils::qrcode::generate_html_with_qrcode(&html_doc, &url);
 
-    HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(html_content)
+    HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html_content)
 }
 
 #[get("/sub")]
-async fn subconverter(req: HttpRequest) -> impl Responder {
+async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     let query_string = req.query_string();
-    let params: Vec<(String, String)> =
-        serde_urlencoded::from_str(&query_string).expect("Failed to parse query string");
+    let params: Vec<(String, String)> = serde_urlencoded
+        ::from_str(&query_string)
+        .expect("Failed to parse query string");
 
     // ------------------------------ 配置文件、文件夹 -------------------------------
 
@@ -61,7 +76,7 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
     let mut userid: usize = 0;
 
     // 转换的目标，只支持v2ray、singbox、clash
-    let mut target: String = "v2ray".to_string();
+    let mut target = data.args.target.to_string();
 
     // -------------------------------- 解析URL参数 ---------------------------------
 
@@ -77,16 +92,24 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
         } else if key.to_lowercase() == "dport" || key.to_lowercase() == "defaultport" {
             let port = value.parse().expect("Failed to parse setport");
             match port >= 80 && port < 65535 {
-                true => set_port = port,
-                false => set_port = set_port,
+                true => {
+                    set_port = port;
+                }
+                false => {
+                    set_port = set_port;
+                }
             }
         } else if key.to_lowercase() == "nodesize" {
             max_node_count = value.parse().expect("Failed to parse maxelementcount");
         } else if key.to_lowercase() == "page" {
             let page_number = value.parse().expect("Failed to parse page");
             match 0 < page_number {
-                true => page = page_number,
-                false => page = page,
+                true => {
+                    page = page_number;
+                }
+                false => {
+                    page = page;
+                }
             }
         } else if key.to_lowercase() == "tls" || key.to_lowercase() == "tlsmode" {
             tls_mode = value.to_string();
@@ -100,14 +123,15 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
 
     // -------------------------- 读取data文件夹里面的数据 ---------------------------
 
-    let (ip_with_none_port_vec, ip_with_port_vec) =
-        match utils::data::read_ip_domain_from_files(folder_path, &tls_mode) {
-            Ok(result) => result,
-            Err(err) => {
-                eprintln!("Error reading files: {}", err);
-                return HttpResponse::InternalServerError().finish();
-            }
-        };
+    let (ip_with_none_port_vec, ip_with_port_vec) = match
+        utils::data::read_ip_domain_from_files(folder_path, &tls_mode)
+    {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("Error reading files: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
 
     // --------------------------- 读取singbox、clash模板 ---------------------------
 
@@ -129,7 +153,7 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
                 &toml_value,
                 userid,
                 proxy_type.as_str(),
-                set_port,
+                set_port
             );
 
             let pages: Vec<Vec<String>> = links
@@ -151,14 +175,14 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
                 userid,
                 proxy_type.as_str(),
                 set_port,
-                max_node_count,
+                max_node_count
             );
 
             let format_json = utils::singbox::match_template_output_singbox_config(
                 enable_template,
                 singbox_template,
                 singbox_outbounds_vecs,
-                page,
+                page
             );
 
             format_json.to_string()
@@ -168,22 +192,23 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
             if max_node_count > 150 {
                 max_node_count = 100;
             }
-            let clash_outbounds_vecs: Vec<Vec<(String, serde_json::Value)>> =
-                utils::clash::batch_process_clash_outbounds(
-                    ip_with_port_vec.clone(),
-                    ip_with_none_port_vec.clone(),
-                    toml_value.clone(),
-                    userid,
-                    proxy_type.as_str(),
-                    set_port,
-                    max_node_count,
-                );
+            let clash_outbounds_vecs: Vec<
+                Vec<(String, serde_json::Value)>
+            > = utils::clash::batch_process_clash_outbounds(
+                ip_with_port_vec.clone(),
+                ip_with_none_port_vec.clone(),
+                toml_value.clone(),
+                userid,
+                proxy_type.as_str(),
+                set_port,
+                max_node_count
+            );
 
             let format_json: String = utils::clash::match_template_output_clash_config(
                 enable_template,
                 clash_template,
                 clash_outbounds_vecs,
-                page,
+                page
             );
             // 调整yaml的缩进（数组）
             let yaml_string: String = utils::indent::adjust_yaml_indentation(&format_json);
@@ -193,32 +218,51 @@ async fn subconverter(req: HttpRequest) -> impl Responder {
         _ => "".to_string(),
     };
 
-    HttpResponse::Ok()
-        .content_type("text/plain; charset=utf-8")
-        .body(html_body)
+    HttpResponse::Ok().content_type("text/plain; charset=utf-8").body(html_body)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // 获取本机的私有IP地址
-    let local_ip = match local_ip() {
-        Ok(ip) => ip,
-        Err(e) => {
-            eprintln!("Failed to get local IP address: {}", e);
-            return Ok(());
+    // 获取命令行参数
+    let result = Args::try_parse();
+    match result {
+        Ok(args) => {
+            let shared_state = web::Data::new(AppState { args: args.clone() });
+            // 获取本机的私有IP地址
+            let local_ip = match local_ip() {
+                Ok(ip) => ip,
+                Err(e) => {
+                    eprintln!("Failed to get local IP address: {}", e);
+                    return Ok(());
+                }
+            };
+            // 绑定的端口
+            let port = args.port;
+            println!(
+                "Server is running on http://{}:{} or http://127.0.0.1:{}",
+                local_ip.to_string(),
+                port,
+                port
+            );
+            // 创建并运行HTTP服务器
+            return HttpServer::new(move || {
+                App::new().app_data(shared_state.clone()).service(index).service(subconverter)
+            })
+                .bind(format!("0.0.0.0:{}", port))?
+                .run().await;
         }
-    };
-    // 绑定的端口
-    let port = 10222;
-    println!(
-        "Server is running on http://{}:{} or http://127.0.0.1:{}",
-        local_ip.to_string(),
-        port,
-        port
-    );
-    // 创建并运行HTTP服务器
-    HttpServer::new(|| App::new().service(index).service(subconverter))
-        .bind(format!("0.0.0.0:{}", port))?
-        .run()
-        .await
+        Err(e) => {
+            if
+                e.kind() == ErrorKind::MissingRequiredArgument ||
+                e.kind() == ErrorKind::InvalidValue
+            {
+                // 如果是因为缺少必需参数或无效值导致的错误，则显示帮助信息
+                Args::command().print_help().unwrap();
+            } else {
+                // 其他类型的错误则正常打印错误信息
+                e.print().unwrap();
+            }
+        }
+    }
+    return Ok(());
 }
