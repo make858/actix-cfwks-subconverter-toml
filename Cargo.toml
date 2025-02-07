@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
 toml = { version = "0.8", features = ["preserve_order"] } # 保持 TOML 文件中键值对的原始顺序
 rand = "0.8.5"
 encoding = "0.2"
