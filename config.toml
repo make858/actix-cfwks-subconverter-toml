@@ -1,37 +1,52 @@
 [proxies]
-[[proxies.vless]]
-remarks_prefix = "VLESS+WS+TLS"
-uuid = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
-host = "vless.pages.dev"
-server_name = "vless.pages.dev"
-path = "/?ed=2048"
+
+# trojan+ws+tls
+[[proxies.trojan]]
+remarks_prefix = "①"
+password = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
+host = "trojan1.pages.dev"
+server_name = "trojan1.pages.dev"
+path = "/"
 random_ports = [443, 2053, 2083, 2087, 2096, 8443] # [443]
 
-# vless+ws
-[[proxies.vless]]
-remarks_prefix = "VLESS+WS"
-uuid = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
-host = "vless.abc.workers.dev"
-server_name = "vless.abc.workers.dev"
-path = "/?ed=2048"
-random_ports = [80, 8080, 8880, 2052, 2082, 2086, 2095]
-
+# trojan+ws+tls
 [[proxies.trojan]]
-remarks_prefix = "TROJAN+WS+TLS"
-password = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
-host = "trojan.pages.dev"
-server_name = "trojan.pages.dev"
-path = "/"
-random_ports = [443, 2053, 2083, 2087, 2096, 8443]
-
-# trojan
-[[proxies.trojan]]
-remarks_prefix = "TROJAN+WS+TLS"
-password = "5be5de1d-8653-4ce3-a600-2ca1af75bdb5"
+remarks_prefix = "②"
+password = "0195bf7c-d0d6-72ad-85c7-7a74e7db64f3"
 host = "trojan2.pages.dev"
 server_name = "trojan2.pages.dev"
 path = "/"
 random_ports = [443, 2053, 2083, 2087, 2096, 8443]
 
+# ——————————————————————————————————————————————————————————————————
+
+# vless+ws
+[[proxies.vless]]
+remarks_prefix = "③"
+uuid = "0195bf7c-f8c6-7add-aa36-a2145cc38ebb"
+host = "vless1.abc.workers.dev"
+server_name = "vless1.abc.workers.dev"
+path = "/?ed=2048"
+random_ports = [80, 8080, 8880, 2052, 2082, 2086, 2095]
+
+# vless+ws+tls
+[[proxies.vless]]
+remarks_prefix = "④"
+uuid = "0195bf7d-17d6-704c-bd6b-fa56710382cc"
+host = "vless2.pages.dev"
+server_name = "vless2.pages.dev"
+path = "/?ed=2048"
+random_ports = [443, 2053, 2083, 2087, 2096, 8443]
+
+# ——————————————————————————————————————————————————————————————————
+
+# ss+"v2ray-plugin"+tls+websocket
+[[proxies.ss]]
+remarks_prefix = "⑤"
+password = "0195c476-63f8-7232-ac42-0ac1eaabe934"
+host = "ss1.pages.dev"                             # 这个cf中绑定的域名
+path = "/192.168.1.1-443"                          # 这个是PROXYIP，格式要保持一样，以前接触到的PROXYIP没有端口，添加433端口
+random_ports = [443, 2053, 2083, 2087, 2096, 8443]
+
 # 后面可以继续添加
-# 注意: 配置这里的信息时，推荐vless的配置在前面,trojan的配置在后面,后面使用可以根据userid=1来定位使用哪个配置
+# 推荐：trojan的配置在前面，vless的配置在后面，ss-v2ray在最后，可以在url中，传入id=1参数来定位，使用哪个配置
