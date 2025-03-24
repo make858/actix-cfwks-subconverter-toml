@@ -17,8 +17,7 @@ pub fn generate_html_with_qrcode(content: &str, url: &str) -> String {
     format!(
         r#"
         <pre>{}</pre>
-        <hr>
-        <p>扫描以下二维码以便在手机上查看：</p>
+        <p>可以使用手机浏览器，扫描以下二维码查看：</p>
         <img src="data:image/png;base64,{}" />
         "#,
         content,
