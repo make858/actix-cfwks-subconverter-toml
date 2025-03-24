@@ -1,223 +1,142 @@
-use rand::{ seq::SliceRandom, thread_rng };
+use crate::utils::toml::{ selecting_config_of_node, Proxy };
+use rand::seq::SliceRandom;
 use serde_json::{ json, Value as JsonValue };
-use toml::Value;
 
-pub fn batch_process_singbox_outbounds(
-    ip_with_port_vec: Vec<String>,
-    ip_with_none_port_vec: Vec<String>,
-    toml_value: Value,
-    userid: usize,
-    proxy_type: &str,
-    set_port: u16,
-    max_element_count: usize
-) -> Vec<Vec<(String, serde_json::Value)>> {
-    // 初始化分页容器
-    let mut singbox_outbounds_vecs: Vec<Vec<(String, serde_json::Value)>> = Vec::new();
-    // 初始化第一页
-    let mut sub_singbox_outbounds_vec: Vec<(String, serde_json::Value)> = Vec::new();
+pub fn build_singbox_json(
+    toml_proxies: &Proxy,
+    csv_tag: String,
+    csv_addr: String,
+    csv_port: u16,
+    uri_port: u16,
+    uri_userid: u8,
+    uri_proxy_type: String,
+    fingerprint: String,
+    http_ports: &[u16; 7], // 非TLS 模式下，http的端口
+    https_ports: &[u16; 6] // TLS 模式下，https的端口
+) -> (String, JsonValue) {
+    for _ in 0..100 {
+        match selecting_config_of_node(toml_proxies, uri_proxy_type.clone(), uri_userid) {
+            Ok(prxy) => {
+                let toml_tag: String = prxy.node.remarks_prefix;
+                let host: String = prxy.node.host;
+                let server_name: String = prxy.node.server_name.unwrap_or_default();
+                let path: String = prxy.node.path;
 
-    match ip_with_port_vec.is_empty() {
-        true => {
-            ip_with_none_port_vec.iter().for_each(|server| {
-                let (remarks, outbounds_value) = build_singbox_config(
-                    toml_value.clone(),
-                    userid,
-                    proxy_type,
-                    server.clone(),
-                    set_port
-                );
-                // 检查当前分页容器是否已满（max_element_count 个元素）
-                if sub_singbox_outbounds_vec.len() == max_element_count {
-                    // 将已满的分页容器添加到分页数组中
-                    singbox_outbounds_vecs.push(sub_singbox_outbounds_vec.clone());
-                    // 创建一个新的分页容器
-                    sub_singbox_outbounds_vec = Vec::new();
+                let (mut ports, reverse_ports) = match host.ends_with("workers.dev") {
+                    true => (http_ports.to_vec(), https_ports.to_vec()),
+                    false => (https_ports.to_vec(), http_ports.to_vec()),
+                };
+                ports = prxy.node.random_ports.unwrap_or(ports);
+                let (port, is_continue) = match (uri_port == 0, csv_port == 0) {
+                    (true, true) => (*ports.choose(&mut rand::thread_rng()).unwrap(), false), // uri端口与csv端口都没有，就随机选一个端口
+                    (true, false) => { (csv_port, reverse_ports.contains(&csv_port)) } // csv端口有，就使用csv端口
+                    (false, true) => (uri_port, reverse_ports.contains(&uri_port)), // uri端口有，就使用uri端口
+                    (false, false) => (uri_port, false), // uri端口与csv端口都有，不管端口是否能使用，都使用uri端口
+                };
+                // 端口不匹配，开启tls和没有开启tls的端口不同，需要换另一个配置
+                if is_continue {
+                    continue;
                 }
-                // 添加修改后的 JSON 对象到当前分页容器
-                sub_singbox_outbounds_vec.push((remarks, outbounds_value));
-            });
-        }
-        false => {
-            ip_with_port_vec.iter().for_each(|item| {
-                let parts: Vec<&str> = item.split(',').collect();
-                match parts.len() == 2 {
-                    true => {
-                        let set_server = parts[0].to_string();
-                        let set_port = parts[1].parse::<u16>().unwrap_or(set_port);
+                // 节点的别名
+                let remarks = match (csv_tag.trim().is_empty(), toml_tag.is_empty()) {
+                    (true, true) => format!("{}:{}", csv_addr, port), // cvs_tag与toml_tag都没有
+                    (false, true) => format!("{}|{}:{}", csv_tag, csv_addr, port), // 仅有csv_tag
+                    (true, false) => format!("{}|{}:{}", toml_tag, csv_addr, port), // 仅有toml_tag
+                    (false, false) => format!("{}{}|{}:{}", toml_tag, csv_tag, csv_addr, port), // 既有csv_tag，也有toml_tag
+                };
 
-                        let (remarks, outbounds_value) = build_singbox_config(
-                            toml_value.clone(),
-                            userid,
-                            proxy_type,
-                            set_server,
-                            set_port
+                match prxy.node_type.as_str() {
+                    "vless" => {
+                        let (remarks, jsonvalue) = build_vless_singbox(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.uuid.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
                         );
-                        // 检查当前分页容器是否已满（max_element_count 个元素）
-                        if sub_singbox_outbounds_vec.len() == max_element_count {
-                            // 将已满的分页容器添加到分页数组中
-                            singbox_outbounds_vecs.push(sub_singbox_outbounds_vec.clone());
-                            // 创建一个新的分页容器
-                            sub_singbox_outbounds_vec = Vec::new();
-                        }
-                        // 添加修改后的 JSON 对象到当前分页容器
-                        sub_singbox_outbounds_vec.push((remarks, outbounds_value));
+                        return (remarks, jsonvalue);
                     }
-                    false => println!("无效数据: {}", item),
-                }
-            });
-        }
-    }
-    // 最后一页可能未满 max_element_count 个元素，将其添加到分页数组中
-    if !sub_singbox_outbounds_vec.is_empty() {
-        singbox_outbounds_vecs.push(sub_singbox_outbounds_vec);
-    }
-    singbox_outbounds_vecs
-}
-
-pub fn match_template_output_singbox_config(
-    enable_template: bool,
-    template: serde_json::Value,
-    outbounds_datas: Vec<Vec<(String, serde_json::Value)>>,
-    page: usize
-) -> String {
-    match enable_template {
-        true => {
-            let mut singbox_template = template.clone();
-            if let Some(outside_outbounds) = singbox_template["outbounds"].as_array_mut() {
-                outbounds_datas[page]
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, value)| {
-                        // 过滤掉空值，并将代理的json数据插入对应的位置，这里从第2+i个位置开始
-                        if !value.0.is_empty() {
-                            outside_outbounds.insert(2 + i, value.1.clone());
-                        }
-                    });
-                // 更新singbox模板中含有{all}的向量值
-                update_singbox_template_value(outside_outbounds, &outbounds_datas, page);
-            }
-            let formatted_json = serde_json
-                ::to_string_pretty(&singbox_template)
-                .unwrap_or_else(|_| "".to_string());
-            return formatted_json;
-        }
-        false => {
-            let outbounds_json =
-                serde_json::json!({
-                "outbounds": outbounds_datas[page].iter().map(|(_, v)| v).collect::<Vec<_>>()
-            });
-
-            let formatted_json = serde_json
-                ::to_string_pretty(&outbounds_json)
-                .unwrap_or_else(|_| "".to_string());
-            return formatted_json;
-        }
-    }
-}
-
-fn update_singbox_template_value(
-    outside_outbounds: &mut Vec<serde_json::Value>,
-    outbounds_datas: &Vec<Vec<(String, serde_json::Value)>>,
-    page: usize
-) {
-    // 遍历数组中的每个元素
-    outside_outbounds.iter_mut().for_each(|item| {
-        // 处理字段为对象的情况
-        if let Some(obj) = item.as_object_mut() {
-            if
-                let Some(inside_outbounds) = obj
-                    .get_mut("outbounds")
-                    .and_then(serde_json::Value::as_array_mut)
-            {
-                // 查找并删除目标值 "{all}"、并将新值合并进来
-                if
-                    let Some(pos) = inside_outbounds
-                        .iter()
-                        .position(|x| x.as_str() == Some("{all}"))
-                {
-                    inside_outbounds.remove(pos);
-
-                    // [将代理tag别名插入] 获取要插入的新值，其中page是指定的内部vec数组的索引
-                    let insert_values: Vec<serde_json::Value> = (*outbounds_datas[page]
-                        .iter()
-                        .filter_map(|(k, _v)| {
-                            if !k.is_empty() {
-                                Some(serde_json::Value::String(k.to_string()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()).to_vec();
-
-                    // 将新数据合并到目标数组
-                    inside_outbounds.extend(insert_values);
+                    "trojan" => {
+                        let (remarks, jsonvalue) = build_trojan_singbox(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    "ss" => {
+                        let (remarks, jsonvalue) = build_ss_singbox(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            host,
+                            path
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    _ => {
+                        return ("".to_string(), JsonValue::Null);
+                    }
                 }
             }
+            Err(err) => eprintln!("警告：{}", err),
         }
-    });
-}
-
-fn build_singbox_config(
-    toml_value: Value,
-    userid: usize,
-    proxy_type: &str,
-    set_server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let proxy: toml::Value = crate::utils::toml::get_toml_proxy(toml_value, userid, proxy_type);
-
-    // 候补端口列表，后续随机选择一个端口
-    let alternate_ports: Vec<u16> = vec![443, 2053, 2083, 2087, 2096, 8443];
-    if proxy.is_table() {
-        let _ = match proxy.get("uuid") {
-            Some(_) => {
-                let (remarks, vless_with_singbox) = build_vless_singbox(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return (remarks, vless_with_singbox);
-            }
-            None => serde_json::Value::Null,
-        };
-
-        let _ = match proxy.get("password") {
-            Some(_) => {
-                let (remarks, trojan_with_singbox) = build_trojan_singbox(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return (remarks, trojan_with_singbox);
-            }
-            None => serde_json::Value::Null,
-        };
     }
-    ("".to_string(), serde_json::Value::Null)
+    return ("".to_string(), JsonValue::Null);
 }
 
+fn build_ss_singbox(
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_password: String,
+    toml_host: String,
+    toml_path: String
+) -> (String, JsonValue) {
+    let singbox_ss_json_str =
+        r#"{
+        "type": "shadowsocks",
+        "tag": "",
+        "server": "",
+        "server_port": 443,
+        "method": "none",
+        "password": "",
+        "plugin": "v2ray-plugin",
+        "plugin_opts": ""
+    }"#;
+
+    let mut ss_jsonvalue: JsonValue = serde_json
+        ::from_str(singbox_ss_json_str)
+        .unwrap_or(JsonValue::Null);
+
+    let plugin_value = format!("tls;mux=0;mode=websocket;path={};host={}", toml_path, toml_host);
+    ss_jsonvalue["server"] = json!(csv_addr);
+    ss_jsonvalue["server_port"] = json!(port);
+    ss_jsonvalue["password"] = json!(toml_password);
+    ss_jsonvalue["plugin_opts"] = json!(plugin_value);
+    ss_jsonvalue["tag"] = json!(remarks.clone());
+
+    return (remarks, ss_jsonvalue);
+}
 fn build_trojan_singbox(
-    toml_value: &Value,
-    alternate_ports: Vec<u16>, // 候补端口列表
-    set_server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let (remarks_prefix, host, server_name, path, random_ports, password) =
-        crate::utils::toml::get_toml_parameters(
-            toml_value,
-            alternate_ports,
-            "password".to_string()
-        );
-
-    // 使用外面设置的端口，还是随机端口
-    let port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-    let remarks = format!("{}|{}:{}", remarks_prefix, set_server, port);
-
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_password: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+    fingerprint: String
+) -> (String, JsonValue) {
     let singbox_trojan_json_str =
         r#"{
         "type": "trojan",
@@ -238,47 +157,41 @@ fn build_trojan_singbox(
         "transport": {
             "type": "ws",
             "path": "/",
-            "headers": {"Host": ""},
-            "early_data_header_name": "Sec-WebSocket-Protocol"
+            "headers": {"Host": ""}
         }
     }"#;
 
-    let mut jsonvalue: JsonValue = serde_json
+    let mut trojan_jsonvalue: JsonValue = serde_json
         ::from_str(singbox_trojan_json_str)
         .unwrap_or(JsonValue::Null);
 
-    let password_field = vec!["password", &password];
+    let password_field = vec!["password".to_string(), toml_password];
 
-    modify_singbox_json_value(
-        &mut jsonvalue,
+    modify_inside_outbounds_value(
+        &mut trojan_jsonvalue,
         remarks.clone(),
-        password_field,
-        set_server,
+        csv_addr,
         port,
-        path,
-        host,
-        server_name
+        password_field,
+        &toml_path,
+        &toml_host,
+        &toml_server_name,
+        &fingerprint
     );
 
-    (remarks, jsonvalue)
+    (remarks, trojan_jsonvalue)
 }
 
 fn build_vless_singbox(
-    toml_value: &Value,
-    ports: Vec<u16>,
-    set_server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let (remarks_prefix, host, server_name, path, random_ports, uuid) =
-        crate::utils::toml::get_toml_parameters(toml_value, ports, "uuid".to_string());
-
-    // 使用外面设置的端口，还是随机端口
-    let port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-    let remarks = format!("{}|{}:{}", remarks_prefix, set_server, port);
-
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_uuid: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+    fingerprint: String
+) -> (String, JsonValue) {
     let vless_with_singbox =
         r#"{
         "type": "vless",
@@ -299,57 +212,55 @@ fn build_vless_singbox(
         "transport": {
             "type": "ws",
             "path": "/",
-            "headers": {"Host": ""},
-            "early_data_header_name": "Sec-WebSocket-Protocol"
+            "headers": {"Host": ""}
         }
     }"#;
-    let mut jsonvalue: JsonValue = serde_json
+    let mut vless_jsonvalue: JsonValue = serde_json
         ::from_str(vless_with_singbox)
         .unwrap_or(JsonValue::Null);
 
-    let uuid_field = vec!["uuid", &uuid];
+    let uuid_field = vec!["uuid".to_string(), toml_uuid];
 
-    modify_singbox_json_value(
-        &mut jsonvalue,
+    modify_inside_outbounds_value(
+        &mut vless_jsonvalue,
         remarks.clone(),
-        uuid_field,
-        set_server,
+        csv_addr,
         port,
-        path,
-        host,
-        server_name
+        uuid_field,
+        &toml_path,
+        &toml_host,
+        &toml_server_name,
+        &fingerprint
     );
 
-    (remarks, jsonvalue)
+    (remarks, vless_jsonvalue)
 }
 
-fn modify_singbox_json_value(
-    jsonvalue: &mut JsonValue,
+fn modify_inside_outbounds_value(
+    inside_outbounds: &mut JsonValue,
     remarks: String,
-    uuid_password_field: Vec<&str>, // 修改uuid或password字段，vless的uuid，trojan的password
-    set_server: String,
+    csv_addr: String,
     port: u16,
+    uuid_or_password: Vec<String>, // 修改vless的uuid，trojan的password
     path: &str,
     host: &str,
-    sni: &str
+    sni: &str,
+    fingerprint: &str
 ) {
-    // 生成随机指纹
-    let fingerprint = crate::utils::common::random_fingerprint();
-
     // 修改顶层字段值
-    if let Some(obj) = jsonvalue.as_object_mut() {
+    if let Some(obj) = inside_outbounds.as_object_mut() {
         // vless的uuid的字段，trojan的password的字段
         obj.insert(
-            uuid_password_field[0].to_string(),
-            JsonValue::String(uuid_password_field[1].to_string())
+            uuid_or_password[0].to_string(),
+            JsonValue::String(uuid_or_password[1].to_string())
         );
         obj.insert("tag".to_string(), JsonValue::String(remarks));
-        obj.insert("server".to_string(), JsonValue::String(set_server.clone()));
+        obj.insert("server".to_string(), JsonValue::String(csv_addr.clone()));
         obj.insert("server_port".to_string(), JsonValue::Number(port.into()));
     }
 
     // 修改内层tls字段值
-    if let Some(tls) = jsonvalue.get_mut("tls") {
+    if let Some(tls) = inside_outbounds.get_mut("tls") {
         if let Some(tls_obj) = tls.as_object_mut() {
             tls_obj.insert("server_name".to_string(), JsonValue::String(sni.to_string()));
 
@@ -372,7 +283,7 @@ fn modify_singbox_json_value(
     }
 
     // 修改内层transport字段值
-    if let Some(transport) = jsonvalue.get_mut("transport") {
+    if let Some(transport) = inside_outbounds.get_mut("transport") {
         if let Some(transport_obj) = transport.as_object_mut() {
             transport_obj.insert("path".to_string(), JsonValue::String(path.to_string()));
 
@@ -383,4 +294,61 @@ fn modify_singbox_json_value(
             }
         }
     }
+}
+
+pub fn add_singbox_template(template: JsonValue, outbounds_vec: Vec<(String, String)>) -> String {
+    let mut singbox_template = template.clone();
+    let inside_outbounds_data: Vec<(String, JsonValue)> = outbounds_vec
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::from_str(v).unwrap_or(JsonValue::Null)))
+        .collect();
+    if let Some(outside_outbounds) = singbox_template["outbounds"].as_array_mut() {
+        inside_outbounds_data
+            .iter()
+            .enumerate()
+            .for_each(|(i, value)| {
+                // 过滤掉空值，并将代理的json数据插入对应的位置，这里从第2+i个位置开始
+                if !value.0.is_empty() {
+                    outside_outbounds.insert(2 + i, value.1.clone());
+                }
+            });
+
+        // 更新singbox模板中含有{all}的向量值
+        outside_outbounds.iter_mut().for_each(|item| {
+            // 处理字段为对象的情况
+            if let Some(obj) = item.as_object_mut() {
+                if
+                    let Some(inside_outbounds) = obj
+                        .get_mut("outbounds")
+                        .and_then(serde_json::Value::as_array_mut)
+                {
+                    // 查找并删除目标值 "{all}"、并将新值合并进来
+                    if
+                        let Some(pos) = inside_outbounds
+                            .iter()
+                            .position(|x| x.as_str() == Some("{all}"))
+                    {
+                        inside_outbounds.remove(pos);
+
+                        // [将代理tag别名插入] 获取要插入的新值，其中page是指定的内部vec数组的索引
+                        let insert_values: Vec<JsonValue> = inside_outbounds_data
+                            .iter()
+                            .filter_map(|(k, _v)| {
+                                if !k.is_empty() {
+                                    Some(JsonValue::String(k.to_string()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        // 将新数据合并到目标数组
+                        inside_outbounds.extend(insert_values);
+                    }
+                }
+            }
+        });
+    }
+
+    serde_json::to_string_pretty(&singbox_template).unwrap_or_default()
 }

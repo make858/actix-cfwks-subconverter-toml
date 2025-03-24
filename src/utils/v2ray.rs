@@ -1,135 +1,142 @@
-use rand::{ seq::SliceRandom, thread_rng };
+use crate::utils::toml::{ selecting_config_of_node, Proxy };
+use rand::seq::SliceRandom;
 use serde_qs as qs;
 use std::collections::BTreeMap;
-use toml::Value;
 
-pub fn batch_process_v2ray_links(
-    ip_with_port_vec: &Vec<String>,
-    ip_with_none_port_vec: &Vec<String>,
-    toml_value: &Value,
-    userid: usize,
-    proxy_type: &str,
-    set_port: u16
-) -> Vec<String> {
-    let mut links = Vec::new();
-
-    match ip_with_port_vec.is_empty() {
-        true => {
-            ip_with_none_port_vec.iter().for_each(|server| {
-                let link = build_v2ray_link(
-                    toml_value.clone(),
-                    userid,
-                    proxy_type,
-                    server.clone(),
-                    set_port
-                );
-                links.push(link);
-            });
-        }
-        false => {
-            ip_with_port_vec.iter().for_each(|item| {
-                let parts: Vec<&str> = item.split(',').collect();
-                match parts.len() == 2 {
-                    true => {
-                        let ip = parts[0].to_string();
-                        let port = parts[1].parse::<u16>().unwrap_or(set_port);
-                        let link = build_v2ray_link(
-                            toml_value.clone(),
-                            userid,
-                            proxy_type,
-                            ip,
-                            port
-                        );
-                        links.push(link);
-                    }
-                    false => println!("无效数据: {}", item),
-                }
-            });
-        }
-    }
-    links
-}
-
-fn build_v2ray_link(
-    toml_value: Value,
-    userid: usize,
-    proxy_type: &str,
-    set_server: String,
-    set_port: u16
+pub fn build_v2ray_link(
+    toml_proxies: &Proxy,
+    csv_tag: String,
+    csv_addr: String,
+    csv_port: u16,
+    uri_port: u16,
+    uri_userid: u8,
+    uri_proxy_type: String,
+    fingerprint: String,
+    http_ports: &[u16; 7], // 非TLS 模式下，http的端口
+    https_ports: &[u16; 6] // TLS 模式下，https的端口
 ) -> String {
-    let proxy: toml::Value = crate::utils::toml::get_toml_proxy(toml_value, userid, proxy_type);
+    for _ in 0..100 {
+        match selecting_config_of_node(toml_proxies, uri_proxy_type.clone(), uri_userid) {
+            Ok(prxy) => {
+                let toml_tag: String = prxy.node.remarks_prefix;
+                let host: String = prxy.node.host;
+                let server_name: String = prxy.node.server_name.unwrap_or_default();
+                let path: String = prxy.node.path;
 
-    // 候补端口列表，后续随机选择一个端口
-    let alternate_ports: Vec<u16> = vec![443, 2053, 2083, 2087, 2096, 8443];
-    if proxy.is_table() {
-        let _ = match proxy.get("uuid") {
-            Some(_) => {
-                let vless_link = build_vless_link(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return vless_link.clone();
+                let (security, mut ports, reverse_ports) = match host.ends_with("workers.dev") {
+                    true => ("none", http_ports.to_vec(), https_ports.to_vec()),
+                    false => ("tls", https_ports.to_vec(), http_ports.to_vec()),
+                };
+                ports = prxy.node.random_ports.unwrap_or(ports);
+                let (port, is_continue) = match (uri_port == 0, csv_port == 0) {
+                    (true, true) => (*ports.choose(&mut rand::thread_rng()).unwrap(), false), // uri端口与csv端口都没有，就随机选一个端口
+                    (true, false) => { (csv_port, reverse_ports.contains(&csv_port)) } // csv端口有，就使用csv端口
+                    (false, true) => (uri_port, reverse_ports.contains(&uri_port)), // uri端口有，就使用uri端口
+                    (false, false) => (uri_port, false), // uri端口与csv端口都有，不管端口是否能使用，都使用uri端口
+                };
+                // 端口不匹配，开启tls和没有开启tls的端口不同，需要换另一个配置
+                if is_continue {
+                    continue;
+                }
+                // 节点的别名
+                let remarks = match (csv_tag.trim().is_empty(), toml_tag.is_empty()) {
+                    (true, true) => format!("{}:{}", csv_addr, port), // cvs_tag与toml_tag都没有
+                    (false, true) => format!("{}|{}:{}", csv_tag, csv_addr, port), // 仅有csv_tag
+                    (true, false) => format!("{}|{}:{}", toml_tag, csv_addr, port), // 仅有toml_tag
+                    (false, false) => format!("{}{}|{}:{}", toml_tag, csv_tag, csv_addr, port), // 既有csv_tag，也有toml_tag
+                };
+
+                match prxy.node_type.as_str() {
+                    "vless" => {
+                        let link = build_vless_link(
+                            &remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.uuid.unwrap_or_default(),
+                            security,
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
+                        );
+                        return link;
+                    }
+                    "trojan" => {
+                        let link = build_trojan_linnk(
+                            &remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            security,
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
+                        );
+                        return link;
+                    }
+                    "ss" => {
+                        let link = build_ss_link(
+                            &remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            host,
+                            path
+                        );
+                        return link;
+                    }
+                    _ => {}
+                }
             }
-            None => "".to_string(),
-        };
-        let _ = match proxy.get("password") {
-            Some(_) => {
-                let trojan_link = build_trojan_linnk(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return trojan_link.clone();
-            }
-            None => "".to_string(),
-        };
+            Err(err) => eprintln!("警告：{}", err),
+        }
     }
     "".to_string()
 }
 
-fn build_trojan_linnk(
-    toml_value: &Value,
-    ports: Vec<u16>,
+// 该链接只能在支持v2ray-plugin插件的NekoBox工具中使用，v2rayN不支持v2ray-plugin插件
+fn build_ss_link(
+    remarks: &str,
     server: String,
-    set_port: u16
+    port: u16,
+    password: String,
+    host: String,
+    path: String
 ) -> String {
-    let (remarks_prefix, host, server_name, path, random_ports, password) =
-        crate::utils::toml::get_toml_parameters(toml_value, ports, "password".to_string());
+    let base64_encoded = base64::encode(format!("none:{}", password).as_bytes());
+    let plugin = format!(
+        "v2ray-plugin;tls;mux=0;mode=websocket;path={};host={}",
+        path,
+        host
+    ).replace("=", "%3D");
+    let ss_link = format!(
+        "ss://{}@{}:{}?plugin={}#{}",
+        base64_encoded,
+        server,
+        port,
+        plugin,
+        remarks
+    );
+    ss_link
+}
 
-    let mut port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-
-    let security = match host.ends_with("workers.dev") {
-        true => "none",
-        false => "tls",
-    };
-
-    // 主要处理workers.dev没有开启tls情况的端口问题（代理软件中也没有开启分片的情况）
-    match [443, 2053, 2083, 2087, 2096, 8443].contains(&port) && security == "none" {
-        true => {
-            port = [80, 8080, 8880, 2052, 2082, 2086, 2095]
-                .choose(&mut thread_rng())
-                .copied()
-                .unwrap();
-        }
-        false => {
-            port = port;
-        }
-    }
-
-    let remarks = format!("{}|{}:{}", remarks_prefix, server, port);
+fn build_trojan_linnk(
+    remarks: &str,
+    server: String,
+    port: u16,
+    password: String,
+    security: &str,
+    host: String,
+    sni: String,
+    path: String,
+    fingerprint: String
+) -> String {
     let encoding_remarks = urlencoding::encode(&remarks);
-
-    let fingerprint = crate::utils::common::random_fingerprint();
 
     let mut params = BTreeMap::new();
     params.insert("security", security);
-    params.insert("sni", &server_name);
+    params.insert("sni", &sni);
     params.insert("fp", &fingerprint);
     params.insert("type", "ws");
     params.insert("host", &host);
@@ -137,7 +144,7 @@ fn build_trojan_linnk(
     params.insert("allowInsecure", "1");
 
     // 过滤掉值为空的键值对，然后将数据结构序列化为Query String格式的字符串
-    let all_params_str = serialize_to_query_string(params);
+    let all_params_str: String = serialize_to_query_string(params);
     let trojan_link = format!(
         "trojan://{password}@{server}:{port}/?{all_params_str}#{encoding_remarks}"
     );
@@ -145,37 +152,18 @@ fn build_trojan_linnk(
     trojan_link
 }
 
-fn build_vless_link(toml_value: &Value, ports: Vec<u16>, server: String, set_port: u16) -> String {
-    let (remarks_prefix, host, server_name, path, random_ports, uuid) =
-        crate::utils::toml::get_toml_parameters(toml_value, ports, "uuid".to_string());
-
-    let security = match host.ends_with("workers.dev") {
-        true => "none",
-        false => "tls",
-    };
-
-    let mut port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-
-    // 主要处理workers.dev没有开启tls情况的端口问题（代理软件中也没有开启分片的情况）
-    match [443, 2053, 2083, 2087, 2096, 8443].contains(&port) && security == "none" {
-        true => {
-            port = [80, 8080, 8880, 2052, 2082, 2086, 2095]
-                .choose(&mut thread_rng())
-                .copied()
-                .unwrap();
-        }
-        false => {
-            port = port;
-        }
-    }
-
-    let remarks = format!("{}|{}:{}", remarks_prefix, server, port);
-    let encoding_remarks = urlencoding::encode(&remarks);
-
-    let fingerprint = crate::utils::common::random_fingerprint();
+fn build_vless_link(
+    remarks: &str,
+    server: String,
+    port: u16,
+    uuid: String,
+    security: &str,
+    host: String,
+    sni: String,
+    path: String,
+    fingerprint: String
+) -> String {
+    let encoding_remarks = urlencoding::encode(remarks);
 
     let mut params = BTreeMap::new();
     params.insert("encryption", "none");
@@ -183,7 +171,7 @@ fn build_vless_link(toml_value: &Value, ports: Vec<u16>, server: String, set_por
     params.insert("type", "ws");
     params.insert("host", &host);
     params.insert("path", &path);
-    params.insert("sni", &server_name);
+    params.insert("sni", &sni);
     params.insert("fp", &fingerprint);
     params.insert("allowInsecure", "1");
 

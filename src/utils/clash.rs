@@ -1,143 +1,303 @@
-use rand::{ seq::SliceRandom, thread_rng };
-use serde_json::Value as JsonValue;
+use crate::utils::toml::{ selecting_config_of_node, Proxy };
+use rand::seq::SliceRandom;
+use serde_json::{ json, Value as JsonValue };
 use serde_yaml::Value as YamlValue;
-use toml::Value;
 
-#[allow(dead_code)]
-pub fn batch_process_clash_outbounds(
-    ip_with_port_vec: Vec<String>,
-    ip_with_none_port_vec: Vec<String>,
-    toml_value: Value,
-    userid: usize,
-    proxy_type: &str,
-    set_port: u16,
-    max_element_count: usize
-) -> Vec<Vec<(String, serde_json::Value)>> {
-    // 初始化分页容器
-    let mut clash_outbounds_vecs: Vec<Vec<(String, serde_json::Value)>> = Vec::new();
-    // 初始化第一页
-    let mut sub_clash_outbounds_vec: Vec<(String, serde_json::Value)> = Vec::new();
+pub fn build_clash_json(
+    toml_proxies: &Proxy,
+    csv_tag: String,
+    csv_addr: String,
+    csv_port: u16,
+    uri_port: u16,
+    uri_userid: u8,
+    uri_proxy_type: String,
+    fingerprint: String,
+    http_ports: &[u16; 7], // 非TLS 模式下，http的端口
+    https_ports: &[u16; 6] // TLS 模式下，https的端口
+) -> (String, JsonValue) {
+    for _ in 0..100 {
+        match selecting_config_of_node(toml_proxies, uri_proxy_type.clone(), uri_userid) {
+            Ok(prxy) => {
+                let toml_tag: String = prxy.node.remarks_prefix;
+                let host: String = prxy.node.host;
+                let server_name: String = prxy.node.server_name.unwrap_or_default();
+                let path: String = prxy.node.path;
 
-    match ip_with_port_vec.is_empty() {
-        true => {
-            ip_with_none_port_vec.iter().for_each(|server| {
-                let (remarks, outbounds_value) = build_clash_config(
-                    toml_value.clone(),
-                    userid,
-                    proxy_type,
-                    server.clone(),
-                    set_port
-                );
-                // 检查当前分页容器是否已满（max_element_count 个元素）
-                if sub_clash_outbounds_vec.len() == max_element_count {
-                    // 将已满的分页容器添加到分页数组中
-                    clash_outbounds_vecs.push(sub_clash_outbounds_vec.clone());
-                    // 创建一个新的分页容器
-                    sub_clash_outbounds_vec = Vec::new();
+                let (mut ports, reverse_ports) = match host.ends_with("workers.dev") {
+                    true => (http_ports.to_vec(), https_ports.to_vec()),
+                    false => (https_ports.to_vec(), http_ports.to_vec()),
+                };
+                ports = prxy.node.random_ports.unwrap_or(ports);
+                let (port, is_continue) = match (uri_port == 0, csv_port == 0) {
+                    (true, true) => (*ports.choose(&mut rand::thread_rng()).unwrap(), false), // uri端口与csv端口都没有，就随机选一个端口
+                    (true, false) => { (csv_port, reverse_ports.contains(&csv_port)) } // csv端口有，就使用csv端口
+                    (false, true) => (uri_port, reverse_ports.contains(&uri_port)), // uri端口有，就使用uri端口
+                    (false, false) => (uri_port, false), // uri端口与csv端口都有，不管端口是否能使用，都使用uri端口
+                };
+                // 端口不匹配，开启tls和没有开启tls的端口不同，需要换另一个配置
+                if is_continue {
+                    continue;
                 }
-                // 添加修改后的 JSON 对象到当前分页容器
-                sub_clash_outbounds_vec.push((remarks, outbounds_value));
-            });
-        }
-        false => {
-            ip_with_port_vec.iter().for_each(|item| {
-                let parts: Vec<&str> = item.split(',').collect();
-                match parts.len() == 2 {
-                    true => {
-                        let set_server = parts[0].to_string();
-                        let set_port = parts[1].parse::<u16>().unwrap_or(set_port);
+                // 节点的别名
+                let remarks = match (csv_tag.trim().is_empty(), toml_tag.is_empty()) {
+                    (true, true) => format!("{}:{}", csv_addr, port), // cvs_tag与toml_tag都没有
+                    (false, true) => format!("{}|{}:{}", csv_tag, csv_addr, port), // 仅有csv_tag
+                    (true, false) => format!("{}|{}:{}", toml_tag, csv_addr, port), // 仅有toml_tag
+                    (false, false) => format!("{}{}|{}:{}", toml_tag, csv_tag, csv_addr, port), // 既有csv_tag，也有toml_tag
+                };
 
-                        let (remarks, outbounds_value) = build_clash_config(
-                            toml_value.clone(),
-                            userid,
-                            proxy_type,
-                            set_server,
-                            set_port
+                match prxy.node_type.as_str() {
+                    "vless" => {
+                        let (remarks, jsonvalue) = build_vless_clash(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.uuid.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
                         );
-                        // 检查当前分页容器是否已满（max_element_count 个元素）
-                        if sub_clash_outbounds_vec.len() == max_element_count {
-                            // 将已满的分页容器添加到分页数组中
-                            clash_outbounds_vecs.push(sub_clash_outbounds_vec.clone());
-                            // 创建一个新的分页容器
-                            sub_clash_outbounds_vec = Vec::new();
-                        }
-                        // 添加修改后的 JSON 对象到当前分页容器
-                        sub_clash_outbounds_vec.push((remarks, outbounds_value));
+                        return (remarks, jsonvalue);
                     }
-                    false => println!("无效数据: {}", item),
+                    "trojan" => {
+                        let (remarks, jsonvalue) = build_trojan_clash(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
+                            fingerprint
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    "ss" => {
+                        let (remarks, jsonvalue) = build_ss_clash(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.password.unwrap_or_default(),
+                            host,
+                            path
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    _ => {
+                        return ("".to_string(), JsonValue::Null);
+                    }
                 }
-            });
+            }
+            Err(err) => eprintln!("警告：{}", err),
         }
     }
-    // 最后一页可能未满 max_element_count 个元素，将其添加到分页数组中
-    if !sub_clash_outbounds_vec.is_empty() {
-        clash_outbounds_vecs.push(sub_clash_outbounds_vec);
-    }
-    clash_outbounds_vecs
+    return ("".to_string(), JsonValue::Null);
 }
 
-pub fn match_template_output_clash_config(
-    enable_template: bool,
-    template: serde_yaml::Value,
-    outbounds_datas: Vec<Vec<(String, serde_json::Value)>>,
-    page: usize
-) -> String {
-    let proxy_name = outbounds_datas[page]
-        .iter()
-        .filter_map(|(k, _v)| k.to_string().parse::<String>().ok())
-        .collect::<Vec<_>>();
-    match enable_template {
-        true => {
-            let mut clash_template: serde_yaml::Value = template.clone();
-            // 添加节点信息到proxies数组（外层）
-            add_node_to_proxies(&mut clash_template, &outbounds_datas, page);
-            // 添加节点名称到proxies数组（里面）
-            add_node_name_to_proxies(&mut clash_template, proxy_name);
-            let yaml_string = serde_yaml::to_string(&clash_template).unwrap_or("".to_string());
-            return yaml_string;
+fn build_ss_clash(
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_password: String,
+    toml_host: String,
+    toml_path: String
+) -> (String, serde_json::Value) {
+    let ss_with_clash =
+        r#"{
+        "name": "ss-v2ray",
+        "type": "ss",
+        "server": "",
+        "port": 443,
+        "cipher": "none",
+        "password": "",
+        "udp": false,
+        "plugin": "v2ray-plugin",
+        "plugin-opts": {
+            "mode": "websocket",
+            "path": "/",
+            "host": "",
+            "tls": true,
+            "mux": false
         }
-        false => {
-            let outbounds_json =
-                serde_json::json!({
-                "proxies": outbounds_datas[page].iter().map(|(_, v)| v).collect::<Vec<_>>()
-            });
+    }"#;
 
-            // 将 serde_json::Value 序列化为 serde_yaml::Value
-            let yaml_value: YamlValue = match serde_yaml::to_value(outbounds_json) {
-                Ok(value) => value,
-                Err(_) => {
-                    return String::new();
-                } // 发生错误时返回空字符串
-            };
+    let mut ss_json: JsonValue = serde_json::from_str(ss_with_clash).unwrap_or_default();
+    ss_json["name"] = json!(remarks);
+    ss_json["server"] = json!(csv_addr);
+    ss_json["port"] = json!(port);
+    ss_json["password"] = json!(toml_password);
+    ss_json["plugin-opts"]["host"] = json!(toml_host);
+    ss_json["plugin-opts"]["path"] = json!(toml_path);
 
-            // 将 serde_yaml::Value 序列化为 YAML 字符串
-            match serde_yaml::to_string(&yaml_value) {
-                Ok(yaml_string) => yaml_string.to_string(),
-                Err(_) => String::new(), // 发生错误时返回空字符串
+    (remarks, ss_json)
+}
+
+fn build_trojan_clash(
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_password: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+    fingerprint: String
+) -> (String, serde_json::Value) {
+    let trojan_with_clash =
+        r#"{
+        "type": "trojan",
+        "name": "",
+        "server": "",
+        "port": 443,
+        "password": "",
+        "network": "ws",
+        "udp": false,
+        "sni": "",
+        "client-fingerprint": "chrome",
+        "skip-cert-verify": true,
+        "ws-opts": {
+            "path": "/",
+            "headers": {"Host": ""}
+        }
+    }"#;
+
+    let mut trojan_json: JsonValue = serde_json::from_str(trojan_with_clash).unwrap_or_default();
+
+    let password_vec = vec!["password".to_string(), toml_password];
+    let sni_vec = vec!["sni".to_string(), toml_server_name];
+
+    modify_clash_json_value(
+        &mut trojan_json,
+        remarks.clone(),
+        csv_addr,
+        port,
+        password_vec,
+        toml_host,
+        sni_vec,
+        toml_path,
+        fingerprint
+    );
+
+    (remarks, trojan_json)
+}
+
+fn build_vless_clash(
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    toml_uuid: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+    fingerprint: String
+) -> (String, serde_json::Value) {
+    let vless_with_clash =
+        r#"{
+        "type": "vless",
+        "name": "tag_name",
+        "server": "",
+        "port": 443,
+        "uuid": "",
+        "network": "ws",
+        "tls": true,
+        "udp": false,
+        "servername": "",
+        "client-fingerprint": "chrome",
+        "skip-cert-verify": true,
+        "ws-opts": {
+            "path": "/",
+            "headers": {"Host": ""}
+        }
+    }"#;
+    let mut vless_json: JsonValue = serde_json::from_str(vless_with_clash).unwrap_or_default();
+
+    // 遇到host是workers.dev的，手动修改tls为false
+    if toml_host.ends_with("workers.dev") {
+        vless_json.as_object_mut().map(|obj| {
+            obj.insert("tls".to_string(), JsonValue::Bool(false));
+        });
+    }
+
+    let uuid_vec = vec!["uuid".to_string(), toml_uuid];
+    let servername_vec = vec!["servername".to_string(), toml_server_name];
+
+    modify_clash_json_value(
+        &mut vless_json,
+        remarks.clone(),
+        csv_addr,
+        port,
+        uuid_vec,
+        toml_host,
+        servername_vec,
+        toml_path,
+        fingerprint
+    );
+
+    (remarks, vless_json)
+}
+
+fn modify_clash_json_value(
+    jsonvalue: &mut JsonValue,
+    remarks: String,
+    csv_addr: String,
+    port: u16,
+    uuid_or_password: Vec<String>, // 修改vless的uuid，trojan的password
+    host: String,
+    sni: Vec<String>, // 修改vless的servername字段，trojan的sni
+    path: String,
+    fingerprint: String
+) {
+    // 修改顶层字段值
+    if let Some(obj) = jsonvalue.as_object_mut() {
+        // vless的uuid，trojan的password
+        obj.insert(
+            uuid_or_password[0].to_string(),
+            JsonValue::String(uuid_or_password[1].to_string())
+        );
+        // vless的servername，trojan的sni
+        obj.insert(sni[0].to_string(), JsonValue::String(sni[1].to_string()));
+        obj.insert("client-fingerprint".to_string(), JsonValue::String(fingerprint));
+        obj.insert("name".to_string(), JsonValue::String(remarks));
+        obj.insert("server".to_string(), JsonValue::String(csv_addr));
+        obj.insert("port".to_string(), JsonValue::Number(port.into()));
+    }
+
+    // 修改ws-opts字段里面其它字段值
+    if let Some(ws_opts) = jsonvalue.get_mut("ws-opts") {
+        if let Some(ws_opts_obj) = ws_opts.as_object_mut() {
+            ws_opts_obj.insert("path".to_string(), JsonValue::String(path));
+            if let Some(headers) = ws_opts_obj.get_mut("headers") {
+                if let Some(headers_obj) = headers.as_object_mut() {
+                    headers_obj.insert("Host".to_string(), JsonValue::String(host));
+                }
             }
         }
     }
 }
 
-fn add_node_to_proxies(
-    clash_template: &mut YamlValue,
-    outbounds_datas: &Vec<Vec<(String, JsonValue)>>,
-    page: usize
-) {
+pub fn add_clash_template(clash_template: &mut YamlValue, clash_data: Vec<(String, String)>) {
+    // 处理节点信息
     if let Some(outside_proxies) = clash_template.get_mut("proxies") {
         if let serde_yaml::Value::Sequence(array) = outside_proxies {
             array.clear(); // 清空数组
 
-            let proxies_vec: Vec<serde_yaml::Value> = (*outbounds_datas[page]
+            let proxies_vec: Vec<serde_yaml::Value> = clash_data
                 .iter()
-                .filter_map(|(_k, v)| serde_yaml::to_value(v).ok())
-                .collect::<Vec<_>>()).to_vec();
+                .filter_map(|(_k, v)| {
+                    // 将 JSON 字符串解析为 serde_json::Value
+                    let json_value: JsonValue = serde_json::from_str(v).unwrap();
+                    // 将 serde_json::Value 转换为 serde_yaml::Value
+                    let yaml_value: YamlValue = serde_yaml
+                        ::from_str(&serde_json::to_string(&json_value).unwrap())
+                        .unwrap();
+                    Some(yaml_value)
+                })
+                .collect::<Vec<_>>()
+                .to_vec();
             array.extend(proxies_vec);
         }
     }
-}
-
-fn add_node_name_to_proxies(clash_template: &mut YamlValue, proxy_name: Vec<String>) {
+    // 处理代理组名称
     if let Some(proxy_groups) = clash_template.get_mut("proxy-groups") {
         if let YamlValue::Sequence(array) = proxy_groups {
             array.iter_mut().for_each(|groups| {
@@ -159,8 +319,11 @@ fn add_node_name_to_proxies(clash_template: &mut YamlValue, proxy_name: Vec<Stri
                         match contains_s01 {
                             true => {
                                 filtered_s01_with_proxies.extend(
-                                    proxy_name
-                                        .clone()
+                                    clash_data
+                                        .iter()
+                                        .map(|(k, _v)| k.to_string())
+                                        .collect::<Vec<_>>()
+                                        .to_vec()
                                         .into_iter()
                                         .map(|name| YamlValue::String(name.to_string()))
                                 );
@@ -172,224 +335,6 @@ fn add_node_name_to_proxies(clash_template: &mut YamlValue, proxy_name: Vec<Stri
                     return proxies_seq.as_sequence_mut();
                 });
             });
-        }
-    }
-}
-
-fn build_clash_config(
-    toml_value: Value,
-    userid: usize,
-    proxy_type: &str,
-    set_server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let proxy: toml::Value = crate::utils::toml::get_toml_proxy(toml_value, userid, proxy_type);
-
-    // 候补端口列表，后续随机选择一个端口
-    let alternate_ports: Vec<u16> = vec![443, 2053, 2083, 2087, 2096, 8443];
-    if proxy.is_table() {
-        let _ = match proxy.get("uuid") {
-            Some(_) => {
-                let (remarks, vless_with_clash) = build_vless_clash(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return (remarks, vless_with_clash);
-            }
-            None => serde_json::Value::Null,
-        };
-        let _ = match proxy.get("password") {
-            Some(_) => {
-                let (remarks, trojan_with_clash) = build_trojan_clash(
-                    &proxy,
-                    alternate_ports.clone(),
-                    set_server.clone(),
-                    set_port
-                );
-                return (remarks, trojan_with_clash);
-            }
-            None => serde_json::Value::Null,
-        };
-    }
-    ("".to_string(), serde_json::Value::Null)
-}
-
-fn build_trojan_clash(
-    toml_value: &Value,
-    alternate_ports: Vec<u16>, // 候补端口列表
-    server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let (remarks_prefix, host, server_name, path, random_ports, password) =
-        crate::utils::toml::get_toml_parameters(
-            toml_value,
-            alternate_ports,
-            "password".to_string()
-        );
-
-    // 使用外面设置的端口，还是随机端口
-    let port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-    let remarks = format!("{}|{}:{}", remarks_prefix, server, port);
-
-    let clash_trojan_json_str =
-        r#"{
-        "type": "trojan",
-        "name": "",
-        "server": "",
-        "port": 443,
-        "password": "",
-        "network": "ws",
-        "tls": true,
-        "udp": false,
-        "sni": "",
-        "client-fingerprint": "chrome",
-        "skip-cert-verify": true,
-        "ws-opts": {
-            "path": "/",
-            "headers": {"Host": ""}
-        }
-    }"#;
-
-    let mut jsonvalue: JsonValue = serde_json
-        ::from_str(clash_trojan_json_str)
-        .unwrap_or(JsonValue::Null);
-
-    let password_field = vec!["password", &password];
-    let sni_field = vec!["sni", &server_name];
-
-    modify_clash_json_value(
-        &mut jsonvalue,
-        remarks.clone(),
-        password_field,
-        sni_field,
-        server,
-        port,
-        path,
-        host
-    );
-
-    (remarks, jsonvalue)
-}
-
-fn build_vless_clash(
-    toml_value: &Value,
-    ports: Vec<u16>,
-    server: String,
-    set_port: u16
-) -> (String, serde_json::Value) {
-    let (remarks_prefix, host, server_name, path, random_ports, uuid) =
-        crate::utils::toml::get_toml_parameters(toml_value, ports, "uuid".to_string());
-
-    // 使用外面设置的端口，还是随机端口
-    let mut port = match set_port == 0 {
-        true => random_ports.choose(&mut thread_rng()).copied().unwrap_or(443),
-        false => set_port,
-    };
-
-    let vless_with_clash =
-        r#"{
-        "type": "vless",
-        "name": "tag_name",
-        "server": "",
-        "port": 443,
-        "uuid": "",
-        "network": "ws",
-        "tls": true,
-        "udp": false,
-        "servername": "",
-        "client-fingerprint": "chrome",
-        "skip-cert-verify": true,
-        "ws-opts": {
-            "path": "/",
-            "headers": {"Host": ""}
-        }
-    }"#;
-    let mut jsonvalue: JsonValue = serde_json
-        ::from_str(vless_with_clash)
-        .unwrap_or(JsonValue::Null);
-
-    // 遇到host是workers.dev的，手动修改tls为false
-    if host.ends_with("workers.dev") {
-        jsonvalue.as_object_mut().map(|obj| {
-            obj.insert("tls".to_string(), JsonValue::Bool(false));
-        });
-        match [443, 2053, 2083, 2087, 2096, 8443].contains(&port) {
-            true => {
-                port = [80, 8080, 8880, 2052, 2082, 2086, 2095]
-                    .choose(&mut thread_rng())
-                    .copied()
-                    .unwrap();
-            }
-            false => {
-                port = port;
-            }
-        }
-    }
-
-    let remarks = format!("{}|{}:{}", remarks_prefix, server, port);
-
-    let uuid_field = vec!["uuid", &uuid];
-    let servername_filed = vec!["servername", &server_name];
-
-    modify_clash_json_value(
-        &mut jsonvalue,
-        remarks.clone(),
-        uuid_field,
-        servername_filed,
-        server,
-        port,
-        path,
-        host
-    );
-
-    (remarks, jsonvalue)
-}
-
-fn modify_clash_json_value(
-    jsonvalue: &mut JsonValue,
-    remarks: String,
-    uuid_password_field: Vec<&str>, // 修改uuid或password字段，vless的uuid，trojan的password
-    servername_sni_field: Vec<&str>, // 修改servername或sni字段，vless的uuid，trojan的password
-    server: String,
-    port: u16,
-    path: &str,
-    host: &str
-) {
-    // 生成随机指纹
-    let fingerprint = crate::utils::common::random_fingerprint();
-
-    // 修改顶层字段值
-    if let Some(obj) = jsonvalue.as_object_mut() {
-        // vless的uuid，trojan的password
-        obj.insert(
-            uuid_password_field[0].to_string(),
-            JsonValue::String(uuid_password_field[1].to_string())
-        );
-        // vless的servername，trojan的sni
-        obj.insert(
-            servername_sni_field[0].to_string(),
-            JsonValue::String(servername_sni_field[1].to_string())
-        );
-        obj.insert("client-fingerprint".to_string(), JsonValue::String(fingerprint.to_string()));
-        obj.insert("name".to_string(), JsonValue::String(remarks));
-        obj.insert("server".to_string(), JsonValue::String(server));
-        obj.insert("port".to_string(), JsonValue::Number(port.into()));
-    }
-
-    // 修改ws-opts字段里面其它字段值
-    if let Some(ws_opts) = jsonvalue.get_mut("ws-opts") {
-        if let Some(ws_opts_obj) = ws_opts.as_object_mut() {
-            ws_opts_obj.insert("path".to_string(), JsonValue::String(path.to_string()));
-            if let Some(headers) = ws_opts_obj.get_mut("headers") {
-                if let Some(headers_obj) = headers.as_object_mut() {
-                    headers_obj.insert("Host".to_string(), JsonValue::String(host.to_string()));
-                }
-            }
         }
     }
 }
