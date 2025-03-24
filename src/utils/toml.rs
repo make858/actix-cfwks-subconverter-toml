@@ -1,111 +1,202 @@
-use rand::{seq::SliceRandom, thread_rng};
-use std::collections::HashMap;
-use toml::Value;
+use serde::Deserialize;
+use std::usize;
+use rand::seq::SliceRandom;
 
-pub fn get_toml_proxy(toml_value: Value, userid: usize, proxy_type: &str) -> toml::Value {
-    let proxies = toml_value.get("proxies").unwrap();
-    let all_proxy = get_toml_all_proxy(proxies);
-
-    let mut map = HashMap::new();
-    map.insert("vless", "uuid");
-    map.insert("trojan", "password");
-    let proxy: toml::Value = match (1..all_proxy.len() + 1).contains(&userid) {
-        true => match map.get(&proxy_type) {
-            Some(map_vlaue) => match all_proxy[userid - 1].get(map_vlaue) {
-                Some(_v) => all_proxy[userid - 1].clone(),
-                None => toml::Value::String("".to_string()),
-            },
-            None => match !["vless", "trojan"].contains(&proxy_type) {
-                true => all_proxy[userid - 1].clone(),
-                false => toml::Value::String("".to_string()),
-            },
-        },
-        false => get_toml_proxy_param(proxies.clone(), proxy_type, all_proxy),
-    };
-    proxy
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct Config {
+    pub proxies: Proxy,
 }
 
-pub fn get_toml_parameters(
-    toml_value: &Value,
-    alternate_ports: Vec<u16>, // 候补端口列表
-    uuid_or_password: String,
-) -> (&str, &str, &str, &str, Vec<u16>, String) {
-    let remarks_prefix = toml_value
-        .get("remarks_prefix")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let host = toml_value
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let server_name = toml_value
-        .get("server_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let path = toml_value
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("/");
-    let random_ports: Vec<u16> = toml_value
-        .get("random_ports")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_integer().and_then(|i| u16::try_from(i).ok()))
-                .collect()
-        })
-        .unwrap_or_else(|| alternate_ports.to_vec());
-
-    let uuid_or_password_value = match toml_value.get(uuid_or_password) {
-        Some(v) => v.as_str().unwrap_or("").to_string(),
-        None => "".to_string(),
-    };
-    (
-        remarks_prefix,
-        host,
-        server_name,
-        path,
-        random_ports,
-        uuid_or_password_value,
-    )
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct Proxy {
+    vless: Option<Vec<Node>>,
+    trojan: Option<Vec<Node>>,
+    ss: Option<Vec<Node>>,
 }
 
-fn get_toml_all_proxy(proxies: &Value) -> Vec<&Value> {
-    let mut all_proxy: Vec<&Value> = Vec::new();
-    if let Value::Table(table) = proxies {
-        for (_, value) in table {
-            if let Value::Array(array) = value {
-                all_proxy.extend(array);
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct Node {
+    pub remarks_prefix: String,
+    pub uuid: Option<String>, // vless拥有
+    pub password: Option<String>, // trojan/ss拥有
+    pub host: String,
+    pub server_name: Option<String>,
+    pub path: String,
+    pub random_ports: Option<Vec<u16>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct SelectedNode {
+    pub node_type: String, // 选中节点的类型，不是传入的proxy_type
+    pub node: Node,
+}
+
+// 筛选数据
+#[allow(dead_code)]
+enum FilterCondition {
+    Text(String), // 节点类型
+    Number(u8), // 节点id，从1开始，超出范围就随机
+}
+
+// 选中某个节点的配置
+#[allow(dead_code)]
+pub fn selecting_config_of_node(
+    proxies: &Proxy,
+    poxy_type: String,
+    node_id: u8
+) -> Result<SelectedNode, String> {
+    let mut rng = rand::thread_rng();
+
+    let vless_length: u8 = match proxies.vless.clone() {
+        Some(vless) => vless.clone().len().try_into().unwrap(),
+        None => 0,
+    };
+    let trojan_length: u8 = match proxies.trojan.clone() {
+        Some(trojan) => trojan.clone().len().try_into().unwrap(),
+        None => 0,
+    };
+    let ss_length: u8 = match proxies.ss.clone() {
+        Some(ss) => ss.clone().len().try_into().unwrap(),
+        None => 0,
+    };
+    let all_length = vless_length + trojan_length + ss_length;
+
+    match (FilterCondition::Text(poxy_type.clone()), FilterCondition::Number(node_id)) {
+        // vless+指定id
+        (FilterCondition::Text(ref s), FilterCondition::Number(n)) if
+            s == "vless" &&
+            (1..=vless_length).contains(&n)
+        =>
+            match proxies.vless.clone() {
+                Some(vless) =>
+                    Ok(SelectedNode {
+                        node_type: "vless".to_string(),
+                        node: vless[(n as usize) - 1].clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // vless+随机id
+        (FilterCondition::Text(ref s), FilterCondition::Number(_)) if s == "vless" =>
+            match proxies.vless.clone() {
+                Some(vless) =>
+                    Ok(SelectedNode {
+                        node_type: "vless".to_string(),
+                        node: vless.choose(&mut rng).unwrap().clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // ——————————————————————————————————————————————————————————————————————————————————————
+
+        // trojan+指定id
+        (FilterCondition::Text(ref s), FilterCondition::Number(n)) if
+            s == "trojan" &&
+            (1..=trojan_length).contains(&n)
+        =>
+            match proxies.trojan.clone() {
+                Some(trojan) =>
+                    Ok(SelectedNode {
+                        node_type: "trojan".to_string(),
+                        node: trojan[(n as usize) - 1].clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // trojan+随机id
+        (FilterCondition::Text(ref s), FilterCondition::Number(_)) if s == "trojan" =>
+            match proxies.trojan.clone() {
+                Some(trojan) =>
+                    Ok(SelectedNode {
+                        node_type: "trojan".to_string(),
+                        node: trojan.choose(&mut rng).unwrap().clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // ——————————————————————————————————————————————————————————————————————————————————————
+
+        // ss+指定id
+        (FilterCondition::Text(ref s), FilterCondition::Number(n)) if
+            s == "ss" &&
+            (1..=ss_length).contains(&n)
+        =>
+            match proxies.ss.clone() {
+                Some(ss) =>
+                    Ok(SelectedNode {
+                        node_type: "ss".to_string(),
+                        node: ss[(n as usize) - 1].clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // ss+随机id
+        (FilterCondition::Text(ref s), FilterCondition::Number(_)) if s == "ss" =>
+            match proxies.ss.clone() {
+                Some(ss) =>
+                    Ok(SelectedNode {
+                        node_type: "ss".to_string(),
+                        node: ss.choose(&mut rng).unwrap().clone(),
+                    }),
+                None => Err("发生未知错误！".to_string()),
+            }
+
+        // ——————————————————————————————————————————————————————————————————————————————————————
+
+        // 指定id，不论vless还是trojan、ss
+        (_, FilterCondition::Number(n)) if (1..=all_length).contains(&n) => {
+            let all_nodes = extend_all_nodes(proxies);
+            match all_nodes.is_empty() {
+                true => Err("发生未知错误！".to_string()),
+                false => Ok(all_nodes[(n as usize) - 1].clone()),
             }
         }
+
+        // 随机节点，不论vless还是trojan、ss
+        (_, _) => {
+            let all_nodes = extend_all_nodes(proxies);
+            all_nodes.choose(&mut rng).cloned().ok_or("发生未知错误！".to_string())
+        }
     }
-    all_proxy
 }
 
-fn get_toml_proxy_param(
-    proxies_value: toml::Value,
-    proxy_type: &str,
-    all_poxy: Vec<&Value>,
-) -> toml::Value {
-    let default_value: Vec<toml::Value> = Vec::new();
-    match proxy_type {
-        "vless" => {
-            let vless_vec: &Vec<toml::Value> = proxies_value
-                .get("vless")
-                .and_then(|v| v.as_array())
-                .unwrap_or(&default_value);
-            vless_vec.choose(&mut thread_rng()).unwrap().clone()
-        }
-        "trojan" => {
-            let trojan_vec: &Vec<toml::Value> = proxies_value
-                .get("trojan")
-                .and_then(|v| v.as_array())
-                .unwrap_or(&default_value);
-            trojan_vec.choose(&mut thread_rng()).unwrap().clone()
-        }
-        _ => match all_poxy.choose(&mut thread_rng()).cloned() {
-            Some(value) => value.clone(),
-            None => Value::String("".to_string()),
-        },
-    }
+// 合并toml中所有trojan和vless、ss节点的配置（先trojan后vless、ss）
+fn extend_all_nodes(proxies: &Proxy) -> Vec<SelectedNode> {
+    let trojan_vec: Vec<SelectedNode> = match proxies.trojan.clone() {
+        Some(trojan) =>
+            trojan
+                .iter()
+                .map(|p| SelectedNode {
+                    node_type: "trojan".to_string(),
+                    node: p.clone(),
+                })
+                .collect(),
+        None => Vec::new(),
+    };
+    let vless_vec: Vec<SelectedNode> = match proxies.vless.clone() {
+        Some(vless) =>
+            vless
+                .iter()
+                .map(|p| SelectedNode { node_type: "vless".to_string(), node: p.clone() })
+                .collect(),
+        None => Vec::new(),
+    };
+    let ss_vec: Vec<SelectedNode> = match proxies.ss.clone() {
+        Some(ss) =>
+            ss
+                .iter()
+                .map(|p| SelectedNode { node_type: "ss".to_string(), node: p.clone() })
+                .collect(),
+        None => Vec::new(),
+    };
+    let all_nodes: Vec<SelectedNode> = trojan_vec
+        .into_iter()
+        .chain(vless_vec)
+        .chain(ss_vec)
+        .collect();
+    all_nodes
 }
