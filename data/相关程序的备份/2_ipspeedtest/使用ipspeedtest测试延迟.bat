@@ -1,0 +1,1 @@
+ipspeedtest.exe -file=ip.txt -outfile=result.csv -port=443 -max=200 -speedtest=0
