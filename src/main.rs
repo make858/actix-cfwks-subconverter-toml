@@ -1,20 +1,20 @@
 mod utils;
 
-use actix_web::{ get, web, App, HttpRequest, HttpResponse, HttpServer, Responder };
-use clap::{ error::ErrorKind, CommandFactory, Parser };
+use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use clap::{error::ErrorKind, CommandFactory, Parser};
+use lazy_static::lazy_static;
 use local_ip_address::local_ip;
 use rand::Rng;
+use serde_json::{json, Value as JsonValue};
 use serde_urlencoded::from_str;
-use lazy_static::lazy_static;
-use serde_json::{ json, Value as JsonValue };
 use serde_yaml::Value as YamlValue;
 use utils::{
-    clash::{ build_clash_json, add_clash_template },
-    singbox::{ build_singbox_json, add_singbox_template },
+    clash::{add_clash_template, build_clash_json},
+    file_data::MyData,
+    indent::adjust_yaml_indentation,
+    singbox::{add_singbox_template, build_singbox_json},
     toml::Config,
     v2ray::build_v2ray_link,
-    indent::adjust_yaml_indentation,
-    file_data::MyData,
 };
 
 const SPECIFICATION: &str = include_str!("../使用说明.txt");
@@ -82,14 +82,18 @@ async fn index(req: HttpRequest) -> impl Responder {
     let url = format!(
         "{}://{}{}",
         req.connection_info().scheme(),
-        req.connection_info().host().replace("127.0.0.1", &ip_address),
+        req.connection_info()
+            .host()
+            .replace("127.0.0.1", &ip_address),
         req.uri()
     );
 
     // 生成二维码并将html_body嵌入网页中
     let html_content = utils::qrcode::generate_html_with_qrcode(&html_doc, &url);
 
-    HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html_content)
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(html_content)
 }
 
 fn string_to_bool(value: &str, current_bool_value: bool) -> bool {
@@ -109,12 +113,12 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
 
     let mut uri_params = Params {
         target: data.args.target.to_string(), // 转换的目标，只支持v2ray、singbox、clash
-        tls_mode: true, // 用于筛选csv数据中的TLS/非TLS端口
-        enable_template: true, // 是否启用sing-box、clash配置模板
-        default_port: 0, // 0表示：由内部代码确定端口
+        tls_mode: true,                       // 用于筛选csv数据中的TLS/非TLS端口
+        enable_template: true,                // 是否启用sing-box、clash配置模板
+        default_port: 0,                      // 0表示：由内部代码确定端口
         max_node_count: 300,
-        page: 1, // 默认使用第一页的数据，构建节点订阅
-        userid: 0, // 使用toml配置中，具体哪个代理信息，有效值从1开始
+        page: 1,                    // 默认使用第一页的数据，构建节点订阅
+        userid: 0,                  // 使用toml配置中，具体哪个代理信息，有效值从1开始
         proxy_type: "".to_string(), // 使用toml配置中，哪些代理信息，可选：[vless,trojan]
         data_source: "./data".to_string(),
         column_name: "colo".to_string(), // csv文件中，以哪个列的字段名作为前缀？可选：[colo,loc,region,city]
@@ -170,15 +174,15 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
             &uri_params.column_name,
             uri_params.default_port,
             max_line,
-            trimmed_quotes_path
+            trimmed_quotes_path,
         )
     } else {
         // 传入的是本地文件路径，就从本地获取数据
         utils::file_data::process_files_data(
             &uri_params.column_name, // 获取指定字段的数据作为节点别名的前缀
             uri_params.default_port, // 没有找到端口的情况，就使用它
-            max_line, // 获取指定数量的数据就返回
-            trimmed_quotes_path // 指定数据源所在文件夹路径或文件路径
+            max_line,                // 获取指定数量的数据就返回
+            trimmed_quotes_path,     // 指定数据源所在文件夹路径或文件路径
         )
     };
 
@@ -186,7 +190,7 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
 
     // 根据TLS模式是否开启，反向剔除不要端口的数据
     let filter_ports = match uri_params.tls_mode {
-        true => HTTP_PORTS.to_vec(), // 过滤掉非TLS模式的端口
+        true => HTTP_PORTS.to_vec(),   // 过滤掉非TLS模式的端口
         false => HTTPS_PORTS.to_vec(), // 过滤掉TLS模式的端口
     };
     let filtered_data: Vec<MyData> = my_datas
@@ -206,18 +210,10 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
 
     // 定义每页的最大长度（元素个数），主要限制singbox、clash配置文件最多节点数
     let page_size = match uri_params.target.as_str() {
-        "singbox" => {
-            match (1..151).contains(&uri_params.max_node_count) {
-                true => uri_params.max_node_count,
-                false => 50,
-            }
-        }
-        "clash" => {
-            match (1..151).contains(&uri_params.max_node_count) {
-                true => uri_params.max_node_count,
-                false => 100,
-            }
-        }
+        "singbox" | "clash" => match (1..151).contains(&uri_params.max_node_count) {
+            true => uri_params.max_node_count,
+            false => 50,
+        },
         _ => uri_params.max_node_count,
     };
 
@@ -258,7 +254,7 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
                             uri_params.proxy_type.clone(),
                             fingerprint.to_string(),
                             &HTTP_PORTS,
-                            &HTTPS_PORTS
+                            &HTTPS_PORTS,
                         );
                         if !link.is_empty() {
                             vec.push(("".to_string(), link));
@@ -275,11 +271,10 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
                             uri_params.proxy_type.clone(),
                             fingerprint.to_string(),
                             &HTTP_PORTS,
-                            &HTTPS_PORTS
+                            &HTTPS_PORTS,
                         );
                         if !remark.is_empty() {
-                            let formatted_json = serde_json
-                                ::to_string_pretty(&singbox_json)
+                            let formatted_json = serde_json::to_string_pretty(&singbox_json)
                                 .unwrap_or_else(|_| "".to_string());
                             vec.push((remark, formatted_json));
                         }
@@ -295,11 +290,10 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
                             uri_params.proxy_type.clone(),
                             fingerprint.to_string(),
                             &HTTP_PORTS,
-                            &HTTPS_PORTS
+                            &HTTPS_PORTS,
                         );
                         if !remark.is_empty() {
-                            let formatted_json = serde_json
-                                ::to_string_pretty(&clash_json)
+                            let formatted_json = serde_json::to_string_pretty(&clash_json)
                                 .unwrap_or_else(|_| "".to_string());
                             vec.push((remark, formatted_json));
                         }
@@ -329,21 +323,19 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
     // ------------------------- 处理输出的内容(是否添加模板) -------------------------
 
     let html_body: String = match uri_params.target.as_str() {
-        "v2ray" =>
-            vec
-                .iter()
-                .map(|(_, value)| value)
-                .cloned()
-                .collect::<Vec<String>>()
-                .join("\n"),
+        "v2ray" => vec
+            .iter()
+            .map(|(_, value)| value)
+            .cloned()
+            .collect::<Vec<String>>()
+            .join("\n"),
         "singbox" => {
             match uri_params.enable_template {
                 true => add_singbox_template(singbox_template, vec),
                 false => {
-                    let outbounds_json: JsonValue =
-                        json!({
-                            "outbounds": vec.iter().map(|(_, v)| serde_json::from_str(v).unwrap_or(JsonValue::Null)).collect::<Vec<_>>()
-                        });
+                    let outbounds_json: JsonValue = json!({
+                        "outbounds": vec.iter().map(|(_, v)| serde_json::from_str(v).unwrap_or(JsonValue::Null)).collect::<Vec<_>>()
+                    });
                     // 将serde_json::value数据转换为JSON字符串
                     serde_json::to_string_pretty(&outbounds_json).unwrap_or_default()
                 }
@@ -355,24 +347,25 @@ async fn subconverter(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
                     add_clash_template(&mut clash_template, vec);
                     // 将serde_json::value数据转换为YAML字符串，并美化字符串的缩进形式
                     adjust_yaml_indentation(
-                        &serde_json::to_string_pretty(&clash_template).unwrap_or_default()
+                        &serde_json::to_string_pretty(&clash_template).unwrap_or_default(),
                     )
                 }
                 false => {
-                    let clash_json_data: JsonValue =
-                        json!({
-                            "proxies": vec.iter().map(|(_, v)| serde_json::from_str(v).unwrap_or(JsonValue::Null)).collect::<Vec<_>>()
-                        });
+                    let clash_json_data: JsonValue = json!({
+                        "proxies": vec.iter().map(|(_, v)| serde_json::from_str(v).unwrap_or(JsonValue::Null)).collect::<Vec<_>>()
+                    });
                     // 将serde_json::value数据转换为YAML字符串，并美化字符串的缩进形式
                     adjust_yaml_indentation(
-                        &serde_json::to_string_pretty(&clash_json_data).unwrap_or_default()
+                        &serde_json::to_string_pretty(&clash_json_data).unwrap_or_default(),
                     )
                 }
             }
         }
-        _ => { "".to_string() }
+        _ => "".to_string(),
     };
-    HttpResponse::Ok().content_type("text/plain; charset=utf-8").body(html_body)
+    HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(html_body)
 }
 
 #[actix_web::main]
@@ -400,15 +393,17 @@ async fn main() -> std::io::Result<()> {
             );
             // 创建并运行HTTP服务器
             return HttpServer::new(move || {
-                App::new().app_data(shared_state.clone()).service(index).service(subconverter)
+                App::new()
+                    .app_data(shared_state.clone())
+                    .service(index)
+                    .service(subconverter)
             })
-                .bind(format!("0.0.0.0:{}", port))?
-                .run().await;
+            .bind(format!("0.0.0.0:{}", port))?
+            .run()
+            .await;
         }
         Err(e) => {
-            if
-                e.kind() == ErrorKind::MissingRequiredArgument ||
-                e.kind() == ErrorKind::InvalidValue
+            if e.kind() == ErrorKind::MissingRequiredArgument || e.kind() == ErrorKind::InvalidValue
             {
                 // 如果是因为缺少必需参数或无效值导致的错误，则显示帮助信息
                 Args::command().print_help().unwrap();
