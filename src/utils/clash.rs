@@ -1,6 +1,6 @@
-use crate::utils::toml::{ selecting_config_of_node, Proxy };
+use crate::utils::toml::{selecting_config_of_node, Proxy};
 use rand::seq::SliceRandom;
-use serde_json::{ json, Value as JsonValue };
+use serde_json::{json, Value as JsonValue};
 use serde_yaml::Value as YamlValue;
 
 pub fn build_clash_json(
@@ -12,25 +12,35 @@ pub fn build_clash_json(
     uri_userid: u8,
     uri_proxy_type: String,
     fingerprint: String,
-    http_ports: &[u16; 7], // 非TLS 模式下，http的端口
-    https_ports: &[u16; 6] // TLS 模式下，https的端口
+    http_ports: &[u16; 7],  // 非TLS 模式下，http的端口
+    https_ports: &[u16; 6], // TLS 模式下，https的端口
 ) -> (String, JsonValue) {
     for _ in 0..100 {
         match selecting_config_of_node(toml_proxies, uri_proxy_type.clone(), uri_userid) {
             Ok(prxy) => {
+                let node_type = prxy.node_type.as_str();
                 let toml_tag: String = prxy.node.remarks_prefix;
                 let host: String = prxy.node.host;
                 let server_name: String = prxy.node.server_name.unwrap_or_default();
+                let toml_ss_tls = prxy.node.tls.unwrap_or(true);
                 let path: String = prxy.node.path;
 
-                let (mut ports, reverse_ports) = match host.ends_with("workers.dev") {
+                let condition = if ["vless", "trojan"].contains(&node_type) {
+                    host.ends_with("workers.dev")
+                } else {
+                    !toml_ss_tls // ss协议的
+                };
+
+                let (mut ports, reverse_ports) = match condition {
                     true => (http_ports.to_vec(), https_ports.to_vec()),
                     false => (https_ports.to_vec(), http_ports.to_vec()),
                 };
+                // 注意：不会检查配置文件的端口是否合法
                 ports = prxy.node.random_ports.unwrap_or(ports);
+
                 let (port, is_continue) = match (uri_port == 0, csv_port == 0) {
                     (true, true) => (*ports.choose(&mut rand::thread_rng()).unwrap(), false), // uri端口与csv端口都没有，就随机选一个端口
-                    (true, false) => { (csv_port, reverse_ports.contains(&csv_port)) } // csv端口有，就使用csv端口
+                    (true, false) => (csv_port, reverse_ports.contains(&csv_port)), // csv端口有，就使用csv端口
                     (false, true) => (uri_port, reverse_ports.contains(&uri_port)), // uri端口有，就使用uri端口
                     (false, false) => (uri_port, false), // uri端口与csv端口都有，不管端口是否能使用，都使用uri端口
                 };
@@ -46,7 +56,7 @@ pub fn build_clash_json(
                     (false, false) => format!("{}{}|{}:{}", toml_tag, csv_tag, csv_addr, port), // 既有csv_tag，也有toml_tag
                 };
 
-                match prxy.node_type.as_str() {
+                match node_type {
                     "vless" => {
                         let (remarks, jsonvalue) = build_vless_clash(
                             remarks,
@@ -56,7 +66,7 @@ pub fn build_clash_json(
                             host,
                             server_name,
                             path,
-                            fingerprint
+                            fingerprint,
                         );
                         return (remarks, jsonvalue);
                     }
@@ -69,7 +79,7 @@ pub fn build_clash_json(
                             host,
                             server_name,
                             path,
-                            fingerprint
+                            fingerprint,
                         );
                         return (remarks, jsonvalue);
                     }
@@ -78,9 +88,10 @@ pub fn build_clash_json(
                             remarks,
                             csv_addr.clone(),
                             port,
-                            prxy.node.password.unwrap_or_default(),
+                            prxy.node.password.unwrap_or("none".to_string()),
+                            toml_ss_tls,
                             host,
-                            path
+                            path,
                         );
                         return (remarks, jsonvalue);
                     }
@@ -100,11 +111,11 @@ fn build_ss_clash(
     csv_addr: String,
     port: u16,
     toml_password: String,
+    toml_tls: bool,
     toml_host: String,
-    toml_path: String
+    toml_path: String,
 ) -> (String, serde_json::Value) {
-    let ss_with_clash =
-        r#"{
+    let ss_with_clash = r#"{
         "name": "ss-v2ray",
         "type": "ss",
         "server": "",
@@ -128,6 +139,7 @@ fn build_ss_clash(
     ss_json["port"] = json!(port);
     ss_json["password"] = json!(toml_password);
     ss_json["plugin-opts"]["host"] = json!(toml_host);
+    ss_json["plugin-opts"]["tls"] = json!(toml_tls);
     ss_json["plugin-opts"]["path"] = json!(toml_path);
 
     (remarks, ss_json)
@@ -141,10 +153,9 @@ fn build_trojan_clash(
     toml_host: String,
     toml_server_name: String, // sni
     toml_path: String,
-    fingerprint: String
+    fingerprint: String,
 ) -> (String, serde_json::Value) {
-    let trojan_with_clash =
-        r#"{
+    let trojan_with_clash = r#"{
         "type": "trojan",
         "name": "",
         "server": "",
@@ -175,7 +186,7 @@ fn build_trojan_clash(
         toml_host,
         sni_vec,
         toml_path,
-        fingerprint
+        fingerprint,
     );
 
     (remarks, trojan_json)
@@ -189,10 +200,9 @@ fn build_vless_clash(
     toml_host: String,
     toml_server_name: String, // sni
     toml_path: String,
-    fingerprint: String
+    fingerprint: String,
 ) -> (String, serde_json::Value) {
-    let vless_with_clash =
-        r#"{
+    let vless_with_clash = r#"{
         "type": "vless",
         "name": "tag_name",
         "server": "",
@@ -230,7 +240,7 @@ fn build_vless_clash(
         toml_host,
         servername_vec,
         toml_path,
-        fingerprint
+        fingerprint,
     );
 
     (remarks, vless_json)
@@ -245,18 +255,21 @@ fn modify_clash_json_value(
     host: String,
     sni: Vec<String>, // 修改vless的servername字段，trojan的sni
     path: String,
-    fingerprint: String
+    fingerprint: String,
 ) {
     // 修改顶层字段值
     if let Some(obj) = jsonvalue.as_object_mut() {
         // vless的uuid，trojan的password
         obj.insert(
             uuid_or_password[0].to_string(),
-            JsonValue::String(uuid_or_password[1].to_string())
+            JsonValue::String(uuid_or_password[1].to_string()),
         );
         // vless的servername，trojan的sni
         obj.insert(sni[0].to_string(), JsonValue::String(sni[1].to_string()));
-        obj.insert("client-fingerprint".to_string(), JsonValue::String(fingerprint));
+        obj.insert(
+            "client-fingerprint".to_string(),
+            JsonValue::String(fingerprint),
+        );
         obj.insert("name".to_string(), JsonValue::String(remarks));
         obj.insert("server".to_string(), JsonValue::String(csv_addr));
         obj.insert("port".to_string(), JsonValue::Number(port.into()));
@@ -287,9 +300,8 @@ pub fn add_clash_template(clash_template: &mut YamlValue, clash_data: Vec<(Strin
                     // 将 JSON 字符串解析为 serde_json::Value
                     let json_value: JsonValue = serde_json::from_str(v).unwrap();
                     // 将 serde_json::Value 转换为 serde_yaml::Value
-                    let yaml_value: YamlValue = serde_yaml
-                        ::from_str(&serde_json::to_string(&json_value).unwrap())
-                        .unwrap();
+                    let yaml_value: YamlValue =
+                        serde_yaml::from_str(&serde_json::to_string(&json_value).unwrap()).unwrap();
                     Some(yaml_value)
                 })
                 .collect::<Vec<_>>()
@@ -325,7 +337,7 @@ pub fn add_clash_template(clash_template: &mut YamlValue, clash_data: Vec<(Strin
                                         .collect::<Vec<_>>()
                                         .to_vec()
                                         .into_iter()
-                                        .map(|name| YamlValue::String(name.to_string()))
+                                        .map(|name| YamlValue::String(name.to_string())),
                                 );
                             }
                             false => {}
