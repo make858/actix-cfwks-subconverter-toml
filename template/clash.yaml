@@ -55,20 +55,12 @@ proxy-groups:
   - name: 🔰 节点选择
     type: select
     proxies:
-      - ♻️ 自动选择
       - 🎯 全球直连
       - s01          # 后续，在这里插入节点名称
-  - name: ♻️ 自动选择
-    type: url-test
-    url: http://www.gstatic.com/generate_204
-    interval: 300
-    proxies:
-      - s01
   - name: 🎥 NETFLIX
     type: select
     proxies:
       - 🔰 节点选择
-      - ♻️ 自动选择
       - 🎯 全球直连
       - s01          # 后续，在这里插入节点名称
   - name: ⛔️ 广告拦截
@@ -87,7 +79,6 @@ proxy-groups:
     type: select
     proxies:
       - 🔰 节点选择
-      - ♻️ 自动选择
       - 🎯 全球直连
       - s01          # 后续，在这里插入节点名称
   - name: 🌏 国内媒体
@@ -112,7 +103,6 @@ proxy-groups:
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
-      - ♻️ 自动选择
       - s01          # 后续，在这里插入节点名称
   - name: 🎯 全球直连
     type: select
@@ -128,7 +118,6 @@ proxy-groups:
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
-      - ♻️ 自动选择
       - s01          # 后续，在这里插入节点名称
 rules:
   - DOMAIN-SUFFIX,local,🎯 全球直连

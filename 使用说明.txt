@@ -14,8 +14,8 @@ http://127.0.0.1:10222/sub
 ——————————————————————————————
 http://127.0.0.1:10222/sub?target=singbox&template=false
 
-http://127.0.0.1:10222/sub?target=singbox&template=false&userid=1
-http://127.0.0.1:10222/sub?target=singbox&template=false&proxy=vless
+http://127.0.0.1:10222/sub?target=singbox&template=false&id=1
+http://127.0.0.1:10222/sub?target=singbox&template=false&type=vless
 
 http://127.0.0.1:10222/sub?target=clash&template=false
 ——————————————————————————————
@@ -27,21 +27,21 @@ http://127.0.0.1:10222/sub?target=v2ray&page=2
 http://127.0.0.1:10222/sub?target=singbox&page=2
 http://127.0.0.1:10222/sub?target=clash&page=2
 ——————————————————————————————
-http://127.0.0.1:10222/sub?target=v2ray&userid=1
-http://127.0.0.1:10222/sub?target=singbox&userid=1
-http://127.0.0.1:10222/sub?target=clash&userid=1
+http://127.0.0.1:10222/sub?target=v2ray&id=1
+http://127.0.0.1:10222/sub?target=singbox&id=1
+http://127.0.0.1:10222/sub?target=clash&id=1
 ——————————————————————————————
-http://127.0.0.1:10222/sub?target=v2ray&proxy=vless
-http://127.0.0.1:10222/sub?target=v2ray&proxy=trojan
-http://127.0.0.1:10222/sub?target=v2ray&proxy=ss
+http://127.0.0.1:10222/sub?target=v2ray&type=vless
+http://127.0.0.1:10222/sub?target=v2ray&type=trojan
+http://127.0.0.1:10222/sub?target=v2ray&type=ss
 
-http://127.0.0.1:10222/sub?target=singbox&proxy=vless
-http://127.0.0.1:10222/sub?target=singbox&proxy=trojan
-http://127.0.0.1:10222/sub?target=singbox&proxy=ss
+http://127.0.0.1:10222/sub?target=singbox&type=vless
+http://127.0.0.1:10222/sub?target=singbox&type=trojan
+http://127.0.0.1:10222/sub?target=singbox&type=ss
 
-http://127.0.0.1:10222/sub?target=clash&proxy=vless
-http://127.0.0.1:10222/sub?target=clash&proxy=trojan
-http://127.0.0.1:10222/sub?target=clash&proxy=ss
+http://127.0.0.1:10222/sub?target=clash&type=vless
+http://127.0.0.1:10222/sub?target=clash&type=trojan
+http://127.0.0.1:10222/sub?target=clash&type=ss
 ——————————————————————————————
 http://127.0.0.1:10222/sub?target=v2ray&tls=true
 http://127.0.0.1:10222/sub?target=v2ray&tls=false
@@ -88,7 +88,7 @@ http://127.0.0.1:10222/sub?target=v2ray&source="D:\result.csv"&column=city
     注意： 
         (1)如果读取到的数据比较多，且是从不同的文件读取而来，数据的排序，跟文件名有关；
         (2)不是随机从读取到的数据中选择n个数据。
-        (3)v2ray默认是300个节点；singbox默认是50个节点，最大150个节点；clash默认100个节点，最大150个节点。
+        (3)v2ray默认是300个节点；singbox、clash默认是50个节点，最大150个节点。
 
     5、template：是否启用sing-box、clash配置模板，可选[true/1, false/0]。
 
@@ -100,11 +100,11 @@ http://127.0.0.1:10222/sub?target=v2ray&source="D:\result.csv"&column=city
 
     8、userid（id）：指定使用哪个toml配置信息，生成订阅？vless和trojan、ss分开计算的。
     例如：
-        userid=1，前面没有proxytype参数，就trojan+vless+ss这样的顺序排序，如congfig.toml中，共5个节点，1就是使用trojan的第一个节点的配置信息，2就是使用第二个节点的配置信息，以此类推。
-        proxytype=vless&userid=1，就是第一个vless的节点的配置信息
-        proxytype=trojan&userid=1，就是第一个trojan的节点的配置信息
-        proxytype=ss&userid=1，就是第一个ss的节点的配置信息
-        userid值的范围是[0,?)，为0是随机配置信息，其它不合法的值也是随机配置信息。
+        id=1，前面没有proxytype参数，就trojan+vless+ss这样的顺序排序，如congfig.toml中，共5个节点，1就是使用trojan的第一个节点的配置信息，2就是使用第二个节点的配置信息，以此类推。
+        type=vless&id=1，就是第一个vless的节点的配置信息
+        type=trojan&id=1，就是第一个trojan的节点的配置信息
+        type=ss&id=1，就是第一个ss的节点的配置信息
+        id值的范围是[0,?)，为0是随机配置信息，其它不合法的值也是随机配置信息。
     建议：所有的trojan在前面，vless在后面，ss在最后，userid不是按照toml的书写顺序定位的；trojan > vless > ss。
 
     9、source：指定使用哪个文件数据，生成订阅？支持本地文件和网络文件的数据。
