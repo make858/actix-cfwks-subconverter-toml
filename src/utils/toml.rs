@@ -14,13 +14,14 @@ pub struct Proxy {
     vless: Option<Vec<Node>>,
     trojan: Option<Vec<Node>>,
     ss: Option<Vec<Node>>,
+    vmess: Option<Vec<Node>>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Node {
     pub remarks_prefix: String,
-    pub uuid: Option<String>,     // vless拥有
+    pub uuid: Option<String>,     // vless/vmess拥有
     pub password: Option<String>, // trojan/ss拥有
     pub tls: Option<bool>,        // ss拥有
     pub host: String,
@@ -64,7 +65,11 @@ pub fn selecting_config_of_node(
         Some(ss) => ss.clone().len().try_into().unwrap(),
         None => 0,
     };
-    let all_length = vless_length + trojan_length + ss_length;
+    let vmess_length: u8 = match proxies.vmess.clone() {
+        Some(vmess) => vmess.clone().len().try_into().unwrap(),
+        None => 0,
+    };
+    let all_length = vless_length + trojan_length + ss_length + vmess_length;
 
     match (
         FilterCondition::Text(poxy_type.clone()),
@@ -145,10 +150,36 @@ pub fn selecting_config_of_node(
                 None => Err("发生未知错误！".to_string()),
             }
         }
+        
+        // ——————————————————————————————————————————————————————————————————————————————————————
+
+        // vmess+指定id
+        (FilterCondition::Text(ref s), FilterCondition::Number(n))
+            if s == "vmess" && (1..=vmess_length).contains(&n) =>
+        {
+            match proxies.vmess.clone() {
+                Some(vmess) => Ok(SelectedNode {
+                    node_type: "vmess".to_string(),
+                    node: vmess[(n as usize) - 1].clone(),
+                }),
+                None => Err("发生未知错误！".to_string()),
+            }
+        }
+
+        // vmess+随机id
+        (FilterCondition::Text(ref s), FilterCondition::Number(_)) if s == "vmess" => {
+            match proxies.vmess.clone() {
+                Some(vmess) => Ok(SelectedNode {
+                    node_type: "vmess".to_string(),
+                    node: vmess.choose(&mut rng).unwrap().clone(),
+                }),
+                None => Err("发生未知错误！".to_string()),
+            }
+        }
 
         // ——————————————————————————————————————————————————————————————————————————————————————
 
-        // 指定id，不论vless还是trojan、ss
+        // 指定id，不论vless还是trojan、ss、vmess
         (_, FilterCondition::Number(n)) if (1..=all_length).contains(&n) => {
             let all_nodes = extend_all_nodes(proxies);
             match all_nodes.is_empty() {
@@ -200,10 +231,21 @@ fn extend_all_nodes(proxies: &Proxy) -> Vec<SelectedNode> {
             .collect(),
         None => Vec::new(),
     };
+    let vmess_vec: Vec<SelectedNode> = match proxies.vmess.clone() {
+        Some(vmess) => vmess
+            .iter()
+            .map(|p| SelectedNode {
+                node_type: "vmess".to_string(),
+                node: p.clone(),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let all_nodes: Vec<SelectedNode> = trojan_vec
         .into_iter()
         .chain(vless_vec)
         .chain(ss_vec)
+        .chain(vmess_vec)
         .collect();
     all_nodes
 }
