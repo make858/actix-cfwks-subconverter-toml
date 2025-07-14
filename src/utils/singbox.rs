@@ -24,7 +24,7 @@ pub fn build_singbox_json(
                 let toml_ss_tls = prxy.node.tls.unwrap_or(true);
                 let path: String = prxy.node.path;
 
-                let condition = if ["vless", "trojan"].contains(&node_type) {
+                let condition = if ["vless", "trojan", "vmess"].contains(&node_type) {
                     host.ends_with("workers.dev")
                 } else {
                     !toml_ss_tls // ss协议的
@@ -58,6 +58,19 @@ pub fn build_singbox_json(
                 match node_type {
                     "vless" => {
                         let (remarks, jsonvalue) = build_vless_singbox(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.uuid.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
+                            fingerprint,
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    "vmess" => {
+                        let (remarks, jsonvalue) = build_vmess_singbox(
                             remarks,
                             csv_addr.clone(),
                             port,
@@ -114,20 +127,6 @@ fn build_ss_singbox(
     toml_host: String,
     toml_path: String,
 ) -> (String, JsonValue) {
-    let singbox_ss_json_str = r#"{
-        "type": "shadowsocks",
-        "tag": "",
-        "server": "",
-        "server_port": 443,
-        "method": "none",
-        "password": "",
-        "plugin": "v2ray-plugin",
-        "plugin_opts": ""
-    }"#;
-
-    let mut ss_jsonvalue: JsonValue =
-        serde_json::from_str(singbox_ss_json_str).unwrap_or(JsonValue::Null);
-
     let plugin_value = match toml_tls {
         true => format!(
             "tls;mux=0;mode=websocket;path={};host={}",
@@ -135,13 +134,19 @@ fn build_ss_singbox(
         ),
         false => format!("mux=0;mode=websocket;path={};host={}", toml_path, toml_host),
     };
-    ss_jsonvalue["server"] = json!(csv_addr);
-    ss_jsonvalue["server_port"] = json!(port);
-    ss_jsonvalue["password"] = json!(toml_password);
-    ss_jsonvalue["plugin_opts"] = json!(plugin_value);
-    ss_jsonvalue["tag"] = json!(remarks.clone());
 
-    return (remarks, ss_jsonvalue);
+    let ss_with_jsonvalue = json!({
+        "type": "shadowsocks",
+        "tag": remarks,
+        "server": csv_addr,
+        "server_port": port,
+        "method": "none",
+        "password": toml_password,
+        "plugin": "v2ray-plugin",
+        "plugin_opts": plugin_value
+    });
+
+    return (remarks, ss_with_jsonvalue);
 }
 
 fn build_trojan_singbox(
@@ -154,47 +159,34 @@ fn build_trojan_singbox(
     toml_path: String,
     fingerprint: String,
 ) -> (String, JsonValue) {
-    let singbox_trojan_json_str = r#"{
+    let tls = match !toml_host.ends_with("workers.dev") {
+        true => true,
+        false => false,
+    };
+    let trojan_with_jsonvalue = json!({
         "type": "trojan",
-        "tag": "tag_name",
-        "server": "",
-        "server_port": 443,
-        "password": "",
+        "tag": remarks,
+        "server": csv_addr,
+        "server_port": port,
+        "password": toml_password,
         "network": "tcp",
         "tls": {
-            "enabled": true,
-            "server_name": "",
+            "enabled": tls,
+            "server_name": toml_server_name,
             "insecure": true,
             "utls": {
                 "enabled": true,
-                "fingerprint": "chrome"
+                "fingerprint": fingerprint
             }
         },
         "transport": {
             "type": "ws",
-            "path": "/",
-            "headers": {"Host": ""}
+            "path": toml_path,
+            "headers": {"Host": toml_host}
         }
-    }"#;
+    });
 
-    let mut trojan_jsonvalue: JsonValue =
-        serde_json::from_str(singbox_trojan_json_str).unwrap_or(JsonValue::Null);
-
-    let password_field = vec!["password".to_string(), toml_password];
-
-    modify_inside_outbounds_value(
-        &mut trojan_jsonvalue,
-        remarks.clone(),
-        csv_addr,
-        port,
-        password_field,
-        &toml_path,
-        &toml_host,
-        &toml_server_name,
-        &fingerprint,
-    );
-
-    (remarks, trojan_jsonvalue)
+    (remarks, trojan_with_jsonvalue)
 }
 
 fn build_vless_singbox(
@@ -207,109 +199,75 @@ fn build_vless_singbox(
     toml_path: String,
     fingerprint: String,
 ) -> (String, JsonValue) {
-    let vless_with_singbox = r#"{
+    let tls = match !toml_host.ends_with("workers.dev") {
+        true => true,
+        false => false,
+    };
+    let vless_with_jsonvalue = json!({
         "type": "vless",
-        "tag": "vless_tag",
-        "server": "",
-        "server_port": 443,
-        "uuid": "",
+        "tag": remarks,
+        "server": csv_addr,
+        "server_port": port,
+        "uuid": toml_uuid,
         "network": "tcp",
         "tls": {
-            "enabled": true,
-            "server_name": "",
+            "enabled": tls,
+            "server_name": toml_server_name,
             "insecure": true,
             "utls": {
                 "enabled": true,
-                "fingerprint": "chrome"
+                "fingerprint": fingerprint
             }
         },
         "transport": {
             "type": "ws",
-            "path": "/",
-            "headers": {"Host": ""}
+            "path": toml_path,
+            "headers": {"Host": toml_host}
         }
-    }"#;
-    let mut vless_jsonvalue: JsonValue =
-        serde_json::from_str(vless_with_singbox).unwrap_or(JsonValue::Null);
+    });
 
-    let uuid_field = vec!["uuid".to_string(), toml_uuid];
-
-    modify_inside_outbounds_value(
-        &mut vless_jsonvalue,
-        remarks.clone(),
-        csv_addr,
-        port,
-        uuid_field,
-        &toml_path,
-        &toml_host,
-        &toml_server_name,
-        &fingerprint,
-    );
-
-    (remarks, vless_jsonvalue)
+    (remarks, vless_with_jsonvalue)
 }
 
-fn modify_inside_outbounds_value(
-    inside_outbounds: &mut JsonValue,
+fn build_vmess_singbox(
     remarks: String,
     csv_addr: String,
     port: u16,
-    uuid_or_password: Vec<String>, // 修改vless的uuid，trojan的password
-    path: &str,
-    host: &str,
-    sni: &str,
-    fingerprint: &str,
-) {
-    // 修改顶层字段值
-    if let Some(obj) = inside_outbounds.as_object_mut() {
-        // vless的uuid的字段，trojan的password的字段
-        obj.insert(
-            uuid_or_password[0].to_string(),
-            JsonValue::String(uuid_or_password[1].to_string()),
-        );
-        obj.insert("tag".to_string(), JsonValue::String(remarks));
-        obj.insert("server".to_string(), JsonValue::String(csv_addr.clone()));
-        obj.insert("server_port".to_string(), JsonValue::Number(port.into()));
-    }
-
-    // 修改内层tls字段值
-    if let Some(tls) = inside_outbounds.get_mut("tls") {
-        if let Some(tls_obj) = tls.as_object_mut() {
-            tls_obj.insert(
-                "server_name".to_string(),
-                JsonValue::String(sni.to_string()),
-            );
-
-            // 手动关闭tls
-            if host.ends_with("workers.dev") {
-                if let Some(tls_enabled) = tls_obj.get_mut("enabled") {
-                    *tls_enabled = json!(false);
-                }
+    toml_uuid: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+    fingerprint: String,
+) -> (String, JsonValue) {
+    let tls = match !toml_host.ends_with("workers.dev") {
+        true => true,
+        false => false,
+    };
+    let vmess_with_jsonvalue = json!({
+        "type": "vmess",
+        "tag": remarks,
+        "server": csv_addr,
+        "server_port": port,
+        "uuid": toml_uuid,
+        "security": "zero",
+        "alter_id": 0,
+        "tls": {
+            "enabled": tls,
+            "server_name": toml_server_name,
+            "insecure": true,
+            "utls": {
+                "enabled": true,
+                "fingerprint": fingerprint
             }
-
-            if let Some(utls) = tls_obj.get_mut("utls") {
-                if let Some(utls_obj) = utls.as_object_mut() {
-                    utls_obj.insert(
-                        "fingerprint".to_string(),
-                        JsonValue::String(fingerprint.to_string()),
-                    );
-                }
-            }
+        },
+        "transport": {
+            "type": "ws",
+            "path": toml_path,
+            "headers": {"Host": toml_host}
         }
-    }
+    });
 
-    // 修改内层transport字段值
-    if let Some(transport) = inside_outbounds.get_mut("transport") {
-        if let Some(transport_obj) = transport.as_object_mut() {
-            transport_obj.insert("path".to_string(), JsonValue::String(path.to_string()));
-
-            if let Some(details) = transport_obj.get_mut("headers") {
-                if let Some(details_obj) = details.as_object_mut() {
-                    details_obj.insert("Host".to_string(), JsonValue::String(host.to_string()));
-                }
-            }
-        }
-    }
+    (remarks, vmess_with_jsonvalue)
 }
 
 pub fn add_singbox_template(template: JsonValue, outbounds_vec: Vec<(String, String)>) -> String {
