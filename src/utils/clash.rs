@@ -25,7 +25,7 @@ pub fn build_clash_json(
                 let toml_ss_tls = prxy.node.tls.unwrap_or(true);
                 let path: String = prxy.node.path;
 
-                let condition = if ["vless", "trojan"].contains(&node_type) {
+                let condition = if ["vless", "trojan", "vmess"].contains(&node_type) {
                     host.ends_with("workers.dev")
                 } else {
                     !toml_ss_tls // ss协议的
@@ -67,6 +67,18 @@ pub fn build_clash_json(
                             server_name,
                             path,
                             fingerprint,
+                        );
+                        return (remarks, jsonvalue);
+                    }
+                    "vmess" => {
+                        let (remarks, jsonvalue) = build_vmess_clash(
+                            remarks,
+                            csv_addr.clone(),
+                            port,
+                            prxy.node.uuid.unwrap_or_default(),
+                            host,
+                            server_name,
+                            path,
                         );
                         return (remarks, jsonvalue);
                     }
@@ -115,34 +127,25 @@ fn build_ss_clash(
     toml_host: String,
     toml_path: String,
 ) -> (String, serde_json::Value) {
-    let ss_with_clash = r#"{
-        "name": "ss-v2ray",
+    let ss_with_jsonvalue = json!({
+        "name": remarks,
         "type": "ss",
-        "server": "",
-        "port": 443,
+        "server": csv_addr,
+        "port": port,
         "cipher": "none",
-        "password": "",
+        "password": toml_password,
         "udp": false,
         "plugin": "v2ray-plugin",
         "plugin-opts": {
             "mode": "websocket",
-            "path": "/",
-            "host": "",
-            "tls": true,
+            "path": toml_path,
+            "host": toml_host,
+            "tls": toml_tls,
             "mux": false
         }
-    }"#;
+    });
 
-    let mut ss_json: JsonValue = serde_json::from_str(ss_with_clash).unwrap_or_default();
-    ss_json["name"] = json!(remarks);
-    ss_json["server"] = json!(csv_addr);
-    ss_json["port"] = json!(port);
-    ss_json["password"] = json!(toml_password);
-    ss_json["plugin-opts"]["host"] = json!(toml_host);
-    ss_json["plugin-opts"]["tls"] = json!(toml_tls);
-    ss_json["plugin-opts"]["path"] = json!(toml_path);
-
-    (remarks, ss_json)
+    (remarks, ss_with_jsonvalue)
 }
 
 fn build_trojan_clash(
@@ -155,41 +158,24 @@ fn build_trojan_clash(
     toml_path: String,
     fingerprint: String,
 ) -> (String, serde_json::Value) {
-    let trojan_with_clash = r#"{
+    let trojan_with_jsonvalue = json!({
         "type": "trojan",
-        "name": "",
-        "server": "",
-        "port": 443,
-        "password": "",
+        "name": remarks,
+        "server": csv_addr,
+        "port": port,
+        "password": toml_password,
         "network": "ws",
         "udp": false,
-        "sni": "",
-        "client-fingerprint": "chrome",
+        "sni": toml_server_name,
+        "client-fingerprint": fingerprint,
         "skip-cert-verify": true,
         "ws-opts": {
-            "path": "/",
-            "headers": {"Host": ""}
+            "path": toml_path,
+            "headers": {"Host": toml_host}
         }
-    }"#;
+    });
 
-    let mut trojan_json: JsonValue = serde_json::from_str(trojan_with_clash).unwrap_or_default();
-
-    let password_vec = vec!["password".to_string(), toml_password];
-    let sni_vec = vec!["sni".to_string(), toml_server_name];
-
-    modify_clash_json_value(
-        &mut trojan_json,
-        remarks.clone(),
-        csv_addr,
-        port,
-        password_vec,
-        toml_host,
-        sni_vec,
-        toml_path,
-        fingerprint,
-    );
-
-    (remarks, trojan_json)
+    (remarks, trojan_with_jsonvalue)
 }
 
 fn build_vless_clash(
@@ -202,90 +188,65 @@ fn build_vless_clash(
     toml_path: String,
     fingerprint: String,
 ) -> (String, serde_json::Value) {
-    let vless_with_clash = r#"{
+    let tls = match !toml_host.ends_with("workers.dev") {
+        true => true,
+        false => false,
+    };
+    let vless_with_jsonvalue = json!({
         "type": "vless",
-        "name": "tag_name",
-        "server": "",
-        "port": 443,
-        "uuid": "",
+        "name": remarks,
+        "server": csv_addr,
+        "port": port,
+        "uuid": toml_uuid,
         "network": "ws",
-        "tls": true,
+        "tls": tls,
         "udp": false,
-        "servername": "",
-        "client-fingerprint": "chrome",
+        "servername": toml_server_name,
+        "client-fingerprint": fingerprint,
         "skip-cert-verify": true,
         "ws-opts": {
-            "path": "/",
-            "headers": {"Host": ""}
+            "path": toml_path,
+            "headers": {"Host": toml_host}
         }
-    }"#;
-    let mut vless_json: JsonValue = serde_json::from_str(vless_with_clash).unwrap_or_default();
+    });
 
-    // 遇到host是workers.dev的，手动修改tls为false
-    if toml_host.ends_with("workers.dev") {
-        vless_json.as_object_mut().map(|obj| {
-            obj.insert("tls".to_string(), JsonValue::Bool(false));
-        });
-    }
-
-    let uuid_vec = vec!["uuid".to_string(), toml_uuid];
-    let servername_vec = vec!["servername".to_string(), toml_server_name];
-
-    modify_clash_json_value(
-        &mut vless_json,
-        remarks.clone(),
-        csv_addr,
-        port,
-        uuid_vec,
-        toml_host,
-        servername_vec,
-        toml_path,
-        fingerprint,
-    );
-
-    (remarks, vless_json)
+    (remarks, vless_with_jsonvalue)
 }
 
-fn modify_clash_json_value(
-    jsonvalue: &mut JsonValue,
+fn build_vmess_clash(
     remarks: String,
     csv_addr: String,
     port: u16,
-    uuid_or_password: Vec<String>, // 修改vless的uuid，trojan的password
-    host: String,
-    sni: Vec<String>, // 修改vless的servername字段，trojan的sni
-    path: String,
-    fingerprint: String,
-) {
-    // 修改顶层字段值
-    if let Some(obj) = jsonvalue.as_object_mut() {
-        // vless的uuid，trojan的password
-        obj.insert(
-            uuid_or_password[0].to_string(),
-            JsonValue::String(uuid_or_password[1].to_string()),
-        );
-        // vless的servername，trojan的sni
-        obj.insert(sni[0].to_string(), JsonValue::String(sni[1].to_string()));
-        obj.insert(
-            "client-fingerprint".to_string(),
-            JsonValue::String(fingerprint),
-        );
-        obj.insert("name".to_string(), JsonValue::String(remarks));
-        obj.insert("server".to_string(), JsonValue::String(csv_addr));
-        obj.insert("port".to_string(), JsonValue::Number(port.into()));
-    }
-
-    // 修改ws-opts字段里面其它字段值
-    if let Some(ws_opts) = jsonvalue.get_mut("ws-opts") {
-        if let Some(ws_opts_obj) = ws_opts.as_object_mut() {
-            ws_opts_obj.insert("path".to_string(), JsonValue::String(path));
-            if let Some(headers) = ws_opts_obj.get_mut("headers") {
-                if let Some(headers_obj) = headers.as_object_mut() {
-                    headers_obj.insert("Host".to_string(), JsonValue::String(host));
-                }
-            }
+    toml_uuid: String,
+    toml_host: String,
+    toml_server_name: String, // sni
+    toml_path: String,
+) -> (String, serde_json::Value) {
+    let tls = match !toml_host.ends_with("workers.dev") {
+        true => true,
+        false => false,
+    };
+    let vmess_with_jsonvalue = json!({
+    "name": remarks,
+    "port": port,
+    "server": csv_addr,
+    "type": "vmess",
+    "uuid": toml_uuid,
+    "alterId": 0,
+    "cipher": "zero",
+    "udp": false,
+    "tls": tls,
+    "skip-cert-verify": true,
+    "servername": toml_server_name,
+    "network": "ws",
+    "ws-opts": {
+        "path": toml_path,
+        "headers": {
+        "Host": toml_host
         }
-    }
+    }});
+
+    (remarks, vmess_with_jsonvalue)
 }
 
 pub fn add_clash_template(clash_template: &mut YamlValue, clash_data: Vec<(String, String)>) {
